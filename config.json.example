@@ -1,0 +1,20 @@
+{
+  "libpath": "/path/to/twine_geyser_plugin.so",
+  "monitored_accounts": [
+    "11111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+  ],
+  "max_slots_tracked": 100,
+  "enable_lthash_notifications": true,
+  "db_host": "localhost",
+  "db_port": 5432,
+  "db_user": "geyser",
+  "db_password": "password",
+  "db_name": "twine_solana_db",
+  "num_worker_threads": 4,
+  "db_connections_per_worker": 2,
+  "max_queue_size": 10000,
+  "batch_size": 1000,
+  "batch_timeout_ms": 100,
+  "proof_scheduling_slot_interval": 10
+}
