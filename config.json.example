@@ -8,13 +8,15 @@
   "enable_lthash_notifications": true,
   "db_host": "localhost",
   "db_port": 5432,
-  "db_user": "geyser",
-  "db_password": "password",
+  "db_user": "geyser_writer",
+  "db_password": "geyser_writer_password",
   "db_name": "twine_solana_db",
   "num_worker_threads": 4,
   "db_connections_per_worker": 2,
   "max_queue_size": 10000,
   "batch_size": 1000,
   "batch_timeout_ms": 100,
-  "proof_scheduling_slot_interval": 10
+  "proof_scheduling_slot_interval": 10,
+  "metrics_port": 9091,
+  "network_mode": "mainnet"
 }

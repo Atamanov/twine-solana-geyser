@@ -16,7 +16,7 @@ pub struct AirlockManager {
     stats: Arc<AirlockStats>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AirlockStats {
     pub total_updates: AtomicUsize,
     pub sealed_slots: AtomicUsize,
@@ -25,6 +25,28 @@ pub struct AirlockStats {
     pub slots_with_monitored_accounts: AtomicUsize,
     pub proof_requests_generated: AtomicUsize,
     pub db_writes: AtomicUsize,
+    pub queue_depth: AtomicUsize,
+    pub queue_capacity: AtomicUsize,
+    pub worker_pool_size: AtomicUsize,
+    pub queue_throughput: AtomicUsize,
+}
+
+impl Default for AirlockStats {
+    fn default() -> Self {
+        Self {
+            total_updates: AtomicUsize::new(0),
+            sealed_slots: AtomicUsize::new(0),
+            active_slots: AtomicUsize::new(0),
+            monitored_account_changes: AtomicUsize::new(0),
+            slots_with_monitored_accounts: AtomicUsize::new(0),
+            proof_requests_generated: AtomicUsize::new(0),
+            db_writes: AtomicUsize::new(0),
+            queue_depth: AtomicUsize::new(0),
+            queue_capacity: AtomicUsize::new(0),
+            worker_pool_size: AtomicUsize::new(0),
+            queue_throughput: AtomicUsize::new(0),
+        }
+    }
 }
 
 impl AirlockManager {
@@ -111,16 +133,9 @@ impl AirlockManager {
     }
 
     pub fn get_stats(&self) -> AirlockStatsSnapshot {
-        AirlockStatsSnapshot {
-            total_updates: self.stats.total_updates.load(Ordering::Relaxed),
-            sealed_slots: self.stats.sealed_slots.load(Ordering::Relaxed),
-            active_slots: self.stats.active_slots.load(Ordering::Relaxed),
-            monitored_accounts: self.monitored_accounts.len(),
-            monitored_account_changes: self.stats.monitored_account_changes.load(Ordering::Relaxed),
-            slots_with_monitored_accounts: self.stats.slots_with_monitored_accounts.load(Ordering::Relaxed),
-            proof_requests_generated: self.stats.proof_requests_generated.load(Ordering::Relaxed),
-            db_writes: self.stats.db_writes.load(Ordering::Relaxed),
-        }
+        let mut snapshot = self.stats.snapshot();
+        snapshot.monitored_accounts = self.monitored_accounts.len();
+        snapshot
     }
 
     pub fn add_monitored_account(&self, pubkey: Pubkey) {
@@ -151,6 +166,25 @@ impl AirlockManager {
     }
 }
 
+impl AirlockStats {
+    pub fn snapshot(&self) -> AirlockStatsSnapshot {
+        AirlockStatsSnapshot {
+            total_updates: self.total_updates.load(Ordering::Relaxed),
+            sealed_slots: self.sealed_slots.load(Ordering::Relaxed),
+            active_slots: self.active_slots.load(Ordering::Relaxed),
+            monitored_accounts: 0, // Will be set by caller
+            monitored_account_changes: self.monitored_account_changes.load(Ordering::Relaxed),
+            slots_with_monitored_accounts: self.slots_with_monitored_accounts.load(Ordering::Relaxed),
+            proof_requests_generated: self.proof_requests_generated.load(Ordering::Relaxed),
+            db_writes: self.db_writes.load(Ordering::Relaxed),
+            queue_depth: self.queue_depth.load(Ordering::Relaxed),
+            queue_capacity: self.queue_capacity.load(Ordering::Relaxed),
+            worker_pool_size: self.worker_pool_size.load(Ordering::Relaxed),
+            queue_throughput: self.queue_throughput.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AirlockStatsSnapshot {
     pub total_updates: usize,
@@ -161,4 +195,8 @@ pub struct AirlockStatsSnapshot {
     pub slots_with_monitored_accounts: usize,
     pub proof_requests_generated: usize,
     pub db_writes: usize,
+    pub queue_depth: usize,
+    pub queue_capacity: usize,
+    pub worker_pool_size: usize,
+    pub queue_throughput: usize,
 }

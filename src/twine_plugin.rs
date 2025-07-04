@@ -16,6 +16,8 @@ use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 use crate::worker_pool::WorkerPool;
+use crate::metrics_server::MetricsServer;
+use crate::chain_monitor::ChainMonitor;
 
 /// Container for slot data waiting to be persisted
 #[derive(Debug)]
@@ -52,6 +54,10 @@ pub struct TwineGeyserPlugin {
     stats: Arc<AirlockStats>,
     /// Last slot when stats were logged
     last_stats_log_slot: AtomicU64,
+    /// Metrics server handle
+    metrics_server: Option<tokio::task::JoinHandle<()>>,
+    /// Chain monitor
+    chain_monitor: Option<Arc<ChainMonitor>>,
 }
 
 impl Default for TwineGeyserPlugin {
@@ -69,6 +75,8 @@ impl Default for TwineGeyserPlugin {
             pending_slot_data: Arc::new(DashMap::new()),
             stats: Arc::new(AirlockStats::default()),
             last_stats_log_slot: AtomicU64::new(0),
+            metrics_server: None,
+            chain_monitor: None,
         }
     }
 }
@@ -113,14 +121,42 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Start worker pool
         let (tx, rx) = bounded(config.max_queue_size);
-        self.db_writer_queue = Some(tx);
+        self.db_writer_queue = Some(tx.clone());
         self.worker_pool = Some(WorkerPool::start(rx, config.clone()));
+        
+        // Set worker pool size and queue capacity in stats
+        self.stats.worker_pool_size.store(config.num_worker_threads, Ordering::Relaxed);
+        self.stats.queue_capacity.store(config.max_queue_size, Ordering::Relaxed);
+        
+        // Start queue depth monitoring
+        let stats = self.stats.clone();
+        let queue_tx = tx.clone();
+        self.runtime.as_ref().unwrap().spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                stats.queue_depth.store(queue_tx.len(), Ordering::Relaxed);
+            }
+        });
+        
+        // Initialize chain monitor
+        let chain_monitor = Arc::new(ChainMonitor::new(config.network_mode.clone()));
+        self.chain_monitor = Some(chain_monitor.clone());
+        
+        // Start network monitoring
+        let monitor = chain_monitor.clone();
+        self.runtime.as_ref().unwrap().spawn(async move {
+            monitor.start_network_monitoring().await;
+        });
 
         // Store config
         self.config = Some(config);
 
         // Start proof scheduling service
         self.start_proof_scheduler();
+        
+        // Start metrics server
+        self.start_metrics_server();
 
         Ok(())
     }
@@ -135,6 +171,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Stop proof scheduler
         if let Some(handle) = self.proof_scheduler.take() {
+            handle.abort();
+        }
+        
+        // Stop metrics server
+        if let Some(handle) = self.metrics_server.take() {
             handle.abort();
         }
 
@@ -279,6 +320,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
 impl TwineGeyserPlugin {
     fn handle_rooted_slot(&self, slot: u64) -> PluginResult<()> {
+        // Update validator slot in chain monitor
+        if let Some(monitor) = &self.chain_monitor {
+            monitor.update_validator_slot(slot);
+        }
+        
         let queue = self
             .db_writer_queue
             .as_ref()
@@ -407,16 +453,25 @@ impl TwineGeyserPlugin {
     }
 
     fn get_stats_snapshot(&self) -> AirlockStatsSnapshot {
-        AirlockStatsSnapshot {
-            total_updates: self.stats.total_updates.load(Ordering::Relaxed),
-            sealed_slots: self.stats.sealed_slots.load(Ordering::Relaxed),
-            active_slots: self.stats.active_slots.load(Ordering::Relaxed),
-            monitored_accounts: self.monitored_accounts.len(),
-            monitored_account_changes: self.stats.monitored_account_changes.load(Ordering::Relaxed),
-            slots_with_monitored_accounts: self.stats.slots_with_monitored_accounts.load(Ordering::Relaxed),
-            proof_requests_generated: self.stats.proof_requests_generated.load(Ordering::Relaxed),
-            db_writes: self.stats.db_writes.load(Ordering::Relaxed),
-        }
+        let mut snapshot = self.stats.snapshot();
+        snapshot.monitored_accounts = self.monitored_accounts.len();
+        snapshot
+    }
+    
+    fn start_metrics_server(&mut self) {
+        let stats = self.stats.clone();
+        let chain_monitor = self.chain_monitor.as_ref().unwrap().clone();
+        let port = self.config.as_ref().unwrap().metrics_port;
+        
+        let runtime = self.runtime.as_ref().unwrap();
+        let handle = runtime.spawn(async move {
+            let server = MetricsServer::new(stats, chain_monitor, port);
+            if let Err(e) = server.run().await {
+                error!("Metrics server error: {}", e);
+            }
+        });
+        
+        self.metrics_server = Some(handle);
     }
 }
 

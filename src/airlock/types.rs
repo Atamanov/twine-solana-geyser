@@ -104,6 +104,22 @@ impl AirlockSlotData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NetworkMode {
+    Devnet,
+    Mainnet,
+}
+
+impl NetworkMode {
+    pub fn rpc_endpoint(&self) -> &'static str {
+        match self {
+            NetworkMode::Devnet => "https://api.devnet.solana.com",
+            NetworkMode::Mainnet => "https://api.mainnet-beta.solana.com",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
     pub monitored_accounts: Vec<String>,
     pub max_slots_tracked: usize,
@@ -125,6 +141,12 @@ pub struct PluginConfig {
     
     // Proof scheduling
     pub proof_scheduling_slot_interval: u64,
+    
+    // Metrics
+    pub metrics_port: u16,
+    
+    // Network mode
+    pub network_mode: String, // "devnet" or "mainnet"
 }
 
 impl Default for PluginConfig {
@@ -144,6 +166,8 @@ impl Default for PluginConfig {
             batch_size: 1000,
             batch_timeout_ms: 100,
             proof_scheduling_slot_interval: 10,
+            metrics_port: 9091,
+            network_mode: "mainnet".to_string(),
         }
     }
 }
