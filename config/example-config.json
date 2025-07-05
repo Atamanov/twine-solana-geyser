@@ -1,9 +1,0 @@
-{
-  "monitored_accounts": [
-    "11111111111111111111111111111111",
-    "Config1111111111111111111111111111111111111",
-    "Vote111111111111111111111111111111111111111"
-  ],
-  "max_slots_tracked": 100,
-  "enable_lthash_notifications": true
-}

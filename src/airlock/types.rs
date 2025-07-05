@@ -21,11 +21,10 @@ pub struct OwnedReplicaAccountInfo {
 
 // Re-export types from agave geyser plugin interface
 pub use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    OwnedAccountChange, BankHashComponentsInfo,
-    ReplicaAccountInfo, ReplicaAccountInfoV2, ReplicaAccountInfoV3,
-    ReplicaAccountInfoVersions, ReplicaBlockInfo, ReplicaBlockInfoVersions,
-    ReplicaTransactionInfo, ReplicaTransactionInfoVersions,
-    ReplicaEntryInfo, ReplicaEntryInfoV2, ReplicaEntryInfoVersions,
+    BankHashComponentsInfo, OwnedAccountChange, ReplicaAccountInfo, ReplicaAccountInfoV2,
+    ReplicaAccountInfoV3, ReplicaAccountInfoVersions, ReplicaBlockInfo, ReplicaBlockInfoVersions,
+    ReplicaEntryInfo, ReplicaEntryInfoV2, ReplicaEntryInfoVersions, ReplicaTransactionInfo,
+    ReplicaTransactionInfoVersions,
 };
 
 // Import LtHash from the correct location
@@ -39,12 +38,14 @@ impl OwnedReplicaAccountInfo {
     ) -> Result<Self, String> {
         match info {
             ReplicaAccountInfoVersions::V0_0_1(_) => {
-                let error_msg = "Unsupported replica account info version V0_0_1. Only V0_0_3 is supported.";
+                let error_msg =
+                    "Unsupported replica account info version V0_0_1. Only V0_0_3 is supported.";
                 error!("{} Account: {}, Slot: {}", error_msg, pubkey, slot);
                 Err(error_msg.to_string())
             }
             ReplicaAccountInfoVersions::V0_0_2(_) => {
-                let error_msg = "Unsupported replica account info version V0_0_2. Only V0_0_3 is supported.";
+                let error_msg =
+                    "Unsupported replica account info version V0_0_2. Only V0_0_3 is supported.";
                 error!("{} Account: {}, Slot: {}", error_msg, pubkey, slot);
                 Err(error_msg.to_string())
             }
@@ -119,34 +120,61 @@ impl NetworkMode {
     }
 }
 
+// Custom deserializer to handle both "mainnet" and "mainnet-beta"
+impl std::str::FromStr for NetworkMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "devnet" => Ok(NetworkMode::Devnet),
+            "mainnet" | "mainnet-beta" => Ok(NetworkMode::Mainnet),
+            _ => Err(format!("Unknown network mode: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
     pub monitored_accounts: Vec<String>,
     pub max_slots_tracked: usize,
     pub enable_lthash_notifications: bool,
-    
+
     // Database configuration
     pub db_host: String,
     pub db_port: u16,
     pub db_user: String,
     pub db_password: String,
     pub db_name: String,
-    
+
     // Worker pool configuration
     pub num_worker_threads: usize,
     pub db_connections_per_worker: usize,
     pub max_queue_size: usize,
     pub batch_size: usize,
     pub batch_timeout_ms: u64,
-    
+
     // Proof scheduling
     pub proof_scheduling_slot_interval: u64,
-    
+
     // Metrics
     pub metrics_port: u16,
-    
+
     // Network mode
-    pub network_mode: String, // "devnet" or "mainnet"
+    pub network_mode: NetworkMode,
+
+    // Logging configuration
+    #[serde(default = "default_log_file")]
+    pub log_file: Option<String>,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+}
+
+fn default_log_file() -> Option<String> {
+    Some("twine-geyser-plugin.log".to_string())
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
 impl Default for PluginConfig {
@@ -167,7 +195,9 @@ impl Default for PluginConfig {
             batch_timeout_ms: 100,
             proof_scheduling_slot_interval: 10,
             metrics_port: 9091,
-            network_mode: "mainnet".to_string(),
+            network_mode: NetworkMode::Mainnet,
+            log_file: default_log_file(),
+            log_level: default_log_level(),
         }
     }
 }

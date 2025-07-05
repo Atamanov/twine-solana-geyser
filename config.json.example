@@ -18,5 +18,7 @@
   "batch_timeout_ms": 100,
   "proof_scheduling_slot_interval": 10,
   "metrics_port": 9091,
-  "network_mode": "mainnet"
+  "network_mode": "mainnet",
+  "log_file": "twine-geyser-plugin.log",
+  "log_level": "info"
 }

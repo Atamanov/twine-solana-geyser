@@ -1,17 +1,18 @@
+use crate::airlock::types::NetworkMode;
+use log::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
-use log::*;
 
 #[derive(Debug)]
 pub struct ChainMonitor {
     pub validator_slot: Arc<AtomicU64>,
     pub network_slot: Arc<AtomicU64>,
-    network_mode: String,
+    network_mode: NetworkMode,
 }
 
 impl ChainMonitor {
-    pub fn new(network_mode: String) -> Self {
+    pub fn new(network_mode: NetworkMode) -> Self {
         Self {
             validator_slot: Arc::new(AtomicU64::new(0)),
             network_slot: Arc::new(AtomicU64::new(0)),
@@ -24,16 +25,12 @@ impl ChainMonitor {
     }
 
     pub async fn start_network_monitoring(self: Arc<Self>) {
-        let rpc_url = match self.network_mode.as_str() {
-            "devnet" => "https://api.devnet.solana.com",
-            "mainnet" | "mainnet-beta" => "https://api.mainnet-beta.solana.com",
-            _ => {
-                error!("Unknown network mode: {}, defaulting to mainnet", self.network_mode);
-                "https://api.mainnet-beta.solana.com"
-            }
-        };
+        let rpc_url = self.network_mode.rpc_endpoint();
 
-        info!("Starting network monitoring for {} at {}", self.network_mode, rpc_url);
+        info!(
+            "Starting network monitoring for {:?} at {}",
+            self.network_mode, rpc_url
+        );
 
         let mut interval = interval(Duration::from_secs(5));
         let client = reqwest::Client::new();
@@ -53,7 +50,11 @@ impl ChainMonitor {
         }
     }
 
-    async fn fetch_network_slot(&self, client: &reqwest::Client, rpc_url: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    async fn fetch_network_slot(
+        &self,
+        client: &reqwest::Client,
+        rpc_url: &str,
+    ) -> Result<u64, Box<dyn std::error::Error>> {
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -69,10 +70,8 @@ impl ChainMonitor {
             .await?;
 
         let json: serde_json::Value = response.json().await?;
-        
-        let slot = json["result"]
-            .as_u64()
-            .ok_or("Invalid slot response")?;
+
+        let slot = json["result"].as_u64().ok_or("Invalid slot response")?;
 
         Ok(slot)
     }
