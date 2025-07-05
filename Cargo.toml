@@ -45,3 +45,8 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+
+[patch.crates-io]
+agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
+solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
+solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
