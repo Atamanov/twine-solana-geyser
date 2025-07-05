@@ -91,6 +91,10 @@ CREATE INDEX IF NOT EXISTS idx_proof_requests_status ON proof_requests (status) 
 CREATE INDEX IF NOT EXISTS idx_proof_requests_created ON proof_requests (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_proof_requests_account_slot ON proof_requests (account_pubkey, slot DESC);
 
+-- Enable compression on hypertables first
+ALTER TABLE slots SET (timescaledb.compress, timescaledb.compress_segmentby = 'slot');
+ALTER TABLE account_changes SET (timescaledb.compress, timescaledb.compress_segmentby = 'account_pubkey', timescaledb.compress_orderby = 'slot DESC');
+
 -- Create compression policy for older data (optional, can be adjusted)
 -- Compress chunks older than 7 days
 SELECT add_compression_policy('slots', INTERVAL '7 days', if_not_exists => TRUE);

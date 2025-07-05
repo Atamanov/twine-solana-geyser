@@ -124,7 +124,7 @@ The plugin logs comprehensive statistics every 100 rooted slots to the log file.
 
 Start the full monitoring stack:
 ```bash
-docker-compose --profile monitoring up -d
+docker-compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
 ```
 
 This includes:

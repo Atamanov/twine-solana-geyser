@@ -97,7 +97,7 @@ Adjust these based on your hardware.
 
 1. Start with monitoring stack:
    ```bash
-   docker-compose --profile monitoring up -d
+   docker-compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
    ```
 
 2. Access services:
