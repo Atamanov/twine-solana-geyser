@@ -3,6 +3,7 @@ pub mod api_server;
 pub mod chain_monitor;
 pub mod logging;
 pub mod metrics_server;
+pub mod stake;
 pub mod twine_plugin;
 pub mod worker_pool;
 

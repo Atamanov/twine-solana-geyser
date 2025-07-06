@@ -1,19 +1,26 @@
 use crate::airlock::types::{
     AirlockSlotData, BankHashComponentsInfo, DbWriteCommand, LtHash, OwnedAccountChange,
-    PluginConfig, ProofRequest, ReplicaBlockInfoVersions,
+    PluginConfig, ProofRequest, ReplicaBlockInfoVersions, VoteTransaction,
+    StakeAccountInfo as DbStakeAccountInfo, EpochValidator,
 };
 use crate::airlock::{AirlockStats, AirlockStatsSnapshot};
+use crate::stake::{self, StakeAccountInfo, slot_to_epoch, get_epoch_boundaries};
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, Result as PluginResult, SlotStatus,
+    ReplicaTransactionInfoVersions,
 };
 use crossbeam_channel::{bounded, Sender};
 use dashmap::{DashMap, DashSet};
 use log::*;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::signature::Signature;
+use solana_transaction::sanitized::SanitizedTransaction;
+use solana_transaction_status::TransactionStatusMeta;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::runtime::Runtime;
+use std::collections::HashMap;
 
 use crate::chain_monitor::ChainMonitor;
 use crate::metrics_server::MetricsServer;
@@ -51,6 +58,12 @@ pub struct TwineGeyserPlugin {
     api_server: Option<ApiServerHandle>,
     /// Chain monitor
     chain_monitor: Option<Arc<ChainMonitor>>,
+    /// Current epoch
+    current_epoch: Arc<AtomicU64>,
+    /// Tracks if we've seen the first account change in a new epoch
+    epoch_first_change_seen: Arc<AtomicBool>,
+    /// Accumulates stake states during epoch transitions
+    epoch_stake_accumulator: Arc<DashMap<String, StakeAccountInfo>>,
 }
 
 impl Default for TwineGeyserPlugin {
@@ -70,6 +83,9 @@ impl Default for TwineGeyserPlugin {
             metrics_server: None,
             api_server: None,
             chain_monitor: None,
+            current_epoch: Arc::new(AtomicU64::new(0)),
+            epoch_first_change_seen: Arc::new(AtomicBool::new(false)),
+            epoch_stake_accumulator: Arc::new(DashMap::new()),
         }
     }
 }
@@ -224,6 +240,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
             handle.shutdown();
         }
 
+
         // Wait for workers to finish
         if let Some(pool) = self.worker_pool.take() {
             pool.join();
@@ -238,6 +255,71 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
     fn notify_account_change(&self, account_change: OwnedAccountChange) -> PluginResult<()> {
         let slot = account_change.slot;
+        let current_epoch = slot_to_epoch(slot);
+        let stored_epoch = self.current_epoch.load(Ordering::Relaxed);
+
+        // Check if this is a stake account
+        let is_stake_account = stake::is_stake_account(account_change.new_account.owner());
+
+        // Handle epoch boundary detection
+        if current_epoch > stored_epoch {
+            info!("Detected new epoch {} at slot {} (previous epoch: {})", 
+                current_epoch, slot, stored_epoch);
+            
+            // If this is the first change in the new epoch, compute validator set
+            if self.epoch_first_change_seen.compare_exchange(
+                false, true, Ordering::SeqCst, Ordering::SeqCst
+            ).is_ok() {
+                self.compute_and_store_epoch_validators(stored_epoch, slot);
+                self.current_epoch.store(current_epoch, Ordering::Relaxed);
+                // Clear the accumulator for the new epoch
+                self.epoch_stake_accumulator.clear();
+                // Reset the flag for the next epoch
+                self.epoch_first_change_seen.store(false, Ordering::Relaxed);
+            }
+        }
+
+        // Process stake account if applicable
+        if is_stake_account {
+            match stake::deserialize_stake_state(account_change.new_account.data()) {
+                Ok(stake_state) => {
+                    let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                    
+                    // Store in accumulator for epoch boundary calculations
+                    self.epoch_stake_accumulator.insert(
+                        account_change.pubkey.to_string(),
+                        stake_info.clone()
+                    );
+                    
+                    // Convert to DB type
+                    let db_stake_info = DbStakeAccountInfo {
+                        stake_pubkey: stake_info.stake_pubkey,
+                        voter_pubkey: stake_info.voter_pubkey,
+                        stake_amount: stake_info.stake_amount,
+                        activation_epoch: stake_info.activation_epoch,
+                        deactivation_epoch: stake_info.deactivation_epoch,
+                        credits_observed: stake_info.credits_observed,
+                        rent_exempt_reserve: stake_info.rent_exempt_reserve,
+                        staker: stake_info.staker,
+                        withdrawer: stake_info.withdrawer,
+                        state_type: stake_info.state_type,
+                    };
+                    
+                    // Send to database
+                    if let Some(queue) = &self.db_writer_queue {
+                        let _ = queue.send(DbWriteCommand::StakeAccountChange {
+                            slot,
+                            stake_info: db_stake_info,
+                            lthash: account_change.new_lthash.0.to_vec(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    debug!("Failed to deserialize stake account {}: {}", 
+                        account_change.pubkey, e);
+                }
+            }
+        }
 
         // Get or create airlock slot data
         let slot_data = self
@@ -455,6 +537,17 @@ impl GeyserPlugin for TwineGeyserPlugin {
         }
         Ok(())
     }
+    
+    fn notify_transaction(&self, transaction_info: ReplicaTransactionInfoVersions, slot: u64) -> PluginResult<()> {
+        match &transaction_info {
+            ReplicaTransactionInfoVersions::V0_0_1(info) => {
+                self.process_transaction_info(info.signature, info.is_vote, info.transaction, info.transaction_status_meta, slot)
+            }
+            ReplicaTransactionInfoVersions::V0_0_2(info) => {
+                self.process_transaction_info(info.signature, info.is_vote, info.transaction, info.transaction_status_meta, slot)
+            }
+        }
+    }
 
     // Enable the enhanced notifications
     fn account_change_notifications_enabled(&self) -> bool {
@@ -468,9 +561,73 @@ impl GeyserPlugin for TwineGeyserPlugin {
     fn bank_hash_components_notifications_enabled(&self) -> bool {
         true
     }
+    
+    fn transaction_notifications_enabled(&self) -> bool {
+        true
+    }
 }
 
 impl TwineGeyserPlugin {
+    fn process_transaction_info(
+        &self,
+        signature: &Signature,
+        is_vote: bool,
+        transaction: &SanitizedTransaction,
+        transaction_status_meta: &TransactionStatusMeta,
+        slot: u64,
+    ) -> PluginResult<()> {
+        // Only process vote transactions
+        if !is_vote {
+            return Ok(());
+        }
+
+        // Get the vote account from the transaction
+        let vote_pubkey = match transaction.message().account_keys().get(0) {
+            Some(pubkey) => pubkey,
+            None => return Ok(()),
+        };
+
+        // Serialize the transaction
+        let serialized_tx = match bincode::serialize(transaction) {
+            Ok(data) => data,
+            Err(e) => {
+                warn!("Failed to serialize vote transaction: {}", e);
+                return Ok(());
+            }
+        };
+
+        // Create transaction metadata
+        let transaction_meta = serde_json::json!({
+            "compute_units_consumed": transaction_status_meta.compute_units_consumed,
+            "status": transaction_status_meta.status,
+            "fee": transaction_status_meta.fee,
+        });
+
+        let vote_tx = VoteTransaction {
+            voter_pubkey: vote_pubkey.to_string(),
+            vote_signature: signature.to_string(),
+            vote_transaction: serialized_tx,
+            transaction_meta: Some(transaction_meta),
+        };
+
+        // Get or create airlock slot data
+        let slot_data = self
+            .airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
+
+        // Add vote transaction to slot
+        slot_data.vote_transactions.write().push(vote_tx);
+
+        info!(
+            "Recorded vote transaction for slot {} from validator {}",
+            slot, vote_pubkey
+        );
+
+        Ok(())
+    }
+
     fn try_write_complete_slot(&self, slot: u64) -> PluginResult<()> {
         // Check if slot exists and has complete data
         if let Some(slot_data_ref) = self.airlock.get(&slot) {
@@ -522,12 +679,14 @@ impl TwineGeyserPlugin {
         let parent_slot = slot_data.parent_slot.read().clone();
         let executed_transaction_count = slot_data.executed_transaction_count.read().clone();
         let entry_count = slot_data.entry_count.read().clone();
+        let vote_transactions = slot_data.vote_transactions.read().clone();
 
         info!(
-            "Writing complete slot {} data to DB: bank_hash={}, lthash_len={}, status={}",
+            "Writing complete slot {} data to DB: bank_hash={}, lthash_len={}, votes={}, status={}",
             slot,
             components.bank_hash,
             delta_lthash.len(),
+            vote_transactions.len(),
             slot_data.status.read()
         );
 
@@ -548,6 +707,7 @@ impl TwineGeyserPlugin {
                 parent_slot,
                 executed_transaction_count,
                 entry_count,
+                vote_transactions,
             })
             .map_err(|_| GeyserPluginError::Custom("Failed to send slot data".into()))?;
 
@@ -973,6 +1133,65 @@ impl TwineGeyserPlugin {
                     warn!("Failed to query monitored accounts from database: {}", e);
                 }
             }
+        }
+    }
+
+    fn compute_and_store_epoch_validators(&self, epoch: u64, computed_at_slot: u64) {
+        // Aggregate stakes by validator from accumulated stake accounts
+        let mut validator_stakes: HashMap<String, u64> = HashMap::new();
+        
+        for entry in self.epoch_stake_accumulator.iter() {
+            let stake_info = entry.value();
+            if let Some(voter_pubkey) = &stake_info.voter_pubkey {
+                // Only count active stakes (not deactivating)
+                if stake_info.deactivation_epoch.is_none() && stake_info.stake_amount > 0 {
+                    *validator_stakes.entry(voter_pubkey.clone()).or_insert(0) += stake_info.stake_amount;
+                }
+            }
+        }
+        
+        let total_stake: u64 = validator_stakes.values().sum();
+        let (epoch_start_slot, epoch_end_slot) = get_epoch_boundaries(epoch);
+        
+        let validators: Vec<EpochValidator> = validator_stakes.into_iter()
+            .map(|(validator_pubkey, total_stake_amount)| {
+                let stake_percentage = if total_stake > 0 {
+                    (total_stake_amount as f64 / total_stake as f64) * 100.0
+                } else {
+                    0.0
+                };
+                
+                EpochValidator {
+                    validator_pubkey,
+                    total_stake: total_stake_amount,
+                    stake_percentage,
+                    total_epoch_stake: total_stake,
+                }
+            })
+            .collect();
+        
+        info!("Computed validator set for epoch {} with {} validators, total stake: {}", 
+            epoch, validators.len(), total_stake);
+        
+        // NOTE: In Solana, stakes are normally only valid for the NEXT epoch after they are activated.
+        // The validator set for epoch N+1 is determined at the boundary between epochs N-1 and N.
+        // However, for simplicity in this implementation, we are using the stakes collected in the 
+        // first change of an epoch for both that epoch and the next one. This means:
+        // - Epoch N stakes are computed from the first account change in epoch N
+        // - These stakes represent the active set for epoch N (even though technically they were
+        //   determined at the N-1/N boundary)
+        // This approach works because we're capturing the reward distribution at the start of each
+        // epoch, which reflects the stakes that were active for voting in that epoch.
+        
+        // Send to database
+        if let Some(queue) = &self.db_writer_queue {
+            let _ = queue.send(DbWriteCommand::EpochValidatorSet {
+                epoch,
+                epoch_start_slot,
+                epoch_end_slot,
+                computed_at_slot,
+                validators,
+            });
         }
     }
 }

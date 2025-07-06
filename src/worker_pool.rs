@@ -1,4 +1,5 @@
-use crate::airlock::types::{DbWriteCommand, PluginConfig};
+use crate::airlock::types::{DbWriteCommand, PluginConfig, VoteTransaction, ValidatorStake,
+    StakeAccountInfo, EpochValidator};
 use crate::airlock::AirlockStats;
 use chrono;
 use crossbeam_channel::Receiver;
@@ -72,6 +73,9 @@ async fn worker_loop(
     let mut batch_changes = Vec::new();
     let mut batch_proofs = Vec::new();
     let mut batch_status_updates = Vec::new();
+    let mut batch_epoch_stakes = Vec::new();
+    let mut batch_stake_accounts = Vec::new();
+    let mut batch_epoch_validators = Vec::new();
     let mut last_batch_time = std::time::Instant::now();
 
     loop {
@@ -87,6 +91,9 @@ async fn worker_loop(
                     DbWriteCommand::SlotStatusUpdate { .. } => batch_status_updates.push(cmd),
                     DbWriteCommand::AccountChanges { .. } => batch_changes.push(cmd),
                     DbWriteCommand::ProofRequests { .. } => batch_proofs.push(cmd),
+                    DbWriteCommand::EpochStakes { .. } => batch_epoch_stakes.push(cmd),
+                    DbWriteCommand::StakeAccountChange { .. } => batch_stake_accounts.push(cmd),
+                    DbWriteCommand::EpochValidatorSet { .. } => batch_epoch_validators.push(cmd),
                 }
 
                 // Check if we should flush
@@ -94,6 +101,9 @@ async fn worker_loop(
                     || batch_changes.len() >= config.batch_size
                     || batch_proofs.len() >= config.batch_size
                     || batch_status_updates.len() >= config.batch_size
+                    || batch_epoch_stakes.len() >= config.batch_size
+                    || batch_stake_accounts.len() >= config.batch_size
+                    || batch_epoch_validators.len() >= config.batch_size
                     || last_batch_time.elapsed()
                         > std::time::Duration::from_millis(config.batch_timeout_ms);
 
@@ -105,6 +115,9 @@ async fn worker_loop(
                         &mut batch_changes,
                         &mut batch_proofs,
                         &mut batch_status_updates,
+                        &mut batch_epoch_stakes,
+                        &mut batch_stake_accounts,
+                        &mut batch_epoch_validators,
                     )
                     .await;
                     last_batch_time = std::time::Instant::now();
@@ -119,6 +132,9 @@ async fn worker_loop(
                     &mut batch_changes,
                     &mut batch_proofs,
                     &mut batch_status_updates,
+                    &mut batch_epoch_stakes,
+                    &mut batch_stake_accounts,
+                    &mut batch_epoch_validators,
                 )
                 .await;
                 last_batch_time = std::time::Instant::now();
@@ -134,6 +150,9 @@ async fn worker_loop(
         &mut batch_changes,
         &mut batch_proofs,
         &mut batch_status_updates,
+        &mut batch_epoch_stakes,
+        &mut batch_stake_accounts,
+        &mut batch_epoch_validators,
     )
     .await;
     info!("Worker {} stopped", worker_id);
@@ -146,6 +165,9 @@ async fn flush_batches(
     changes: &mut Vec<DbWriteCommand>,
     proofs: &mut Vec<DbWriteCommand>,
     status_updates: &mut Vec<DbWriteCommand>,
+    epoch_stakes: &mut Vec<DbWriteCommand>,
+    stake_accounts: &mut Vec<DbWriteCommand>,
+    epoch_validators: &mut Vec<DbWriteCommand>,
 ) {
     let client = match pool.get().await {
         Ok(c) => c,
@@ -204,6 +226,39 @@ async fn flush_batches(
         }
     }
 
+    // Process epoch stakes
+    if !epoch_stakes.is_empty() {
+        match process_epoch_stakes_batch(&client, epoch_stakes).await {
+            Ok(count) => debug!("Inserted {} epoch stakes", count),
+            Err(e) => {
+                error!("Failed to insert epoch stakes: {}", e);
+                success = false;
+            }
+        }
+    }
+
+    // Process stake account changes
+    if !stake_accounts.is_empty() {
+        match process_stake_accounts_batch(&client, stake_accounts).await {
+            Ok(count) => debug!("Inserted {} stake account changes", count),
+            Err(e) => {
+                error!("Failed to insert stake account changes: {}", e);
+                success = false;
+            }
+        }
+    }
+
+    // Process epoch validator sets
+    if !epoch_validators.is_empty() {
+        match process_epoch_validators_batch(&client, epoch_validators).await {
+            Ok(count) => debug!("Inserted {} epoch validator sets", count),
+            Err(e) => {
+                error!("Failed to insert epoch validator sets: {}", e);
+                success = false;
+            }
+        }
+    }
+
     if success {
         stats
             .db_batch_success_count
@@ -242,6 +297,9 @@ async fn flush_batches(
     changes.clear();
     proofs.clear();
     status_updates.clear();
+    epoch_stakes.clear();
+    stake_accounts.clear();
+    epoch_validators.clear();
 }
 
 async fn process_slot_batch(
@@ -266,16 +324,30 @@ async fn process_slot_batch(
             parent_slot,
             executed_transaction_count,
             entry_count,
+            vote_transactions,
         } = cmd
         {
+            // Create vote info JSON
+            let vote_info = if !vote_transactions.is_empty() {
+                let vote_pubkeys: Vec<&str> = vote_transactions.iter()
+                    .map(|v| v.voter_pubkey.as_str())
+                    .collect();
+                Some(serde_json::json!({
+                    "count": vote_transactions.len(),
+                    "voters": vote_pubkeys
+                }))
+            } else {
+                None
+            };
+
             let query = r#"
                 INSERT INTO slots (
                     slot, bank_hash, parent_bank_hash, signature_count, 
                     last_blockhash, cumulative_lthash, delta_lthash,
                     accounts_delta_hash, accounts_lthash_checksum, epoch_accounts_hash,
                     status, rooted_at, blockhash, parent_slot, executed_transaction_count, entry_count,
-                    block_metadata_updated_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'rooted', NOW(), $11, $12, $13, $14, $15)
+                    block_metadata_updated_at, vote_count, vote_transactions
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'rooted', NOW(), $11, $12, $13, $14, $15, $16, $17)
                 ON CONFLICT (slot) DO UPDATE SET
                     bank_hash = EXCLUDED.bank_hash,
                     parent_bank_hash = EXCLUDED.parent_bank_hash,
@@ -292,7 +364,9 @@ async fn process_slot_batch(
                     parent_slot = COALESCE(EXCLUDED.parent_slot, slots.parent_slot),
                     executed_transaction_count = COALESCE(EXCLUDED.executed_transaction_count, slots.executed_transaction_count),
                     entry_count = COALESCE(EXCLUDED.entry_count, slots.entry_count),
-                    block_metadata_updated_at = CASE WHEN EXCLUDED.blockhash IS NOT NULL THEN NOW() ELSE slots.block_metadata_updated_at END
+                    block_metadata_updated_at = CASE WHEN EXCLUDED.blockhash IS NOT NULL THEN NOW() ELSE slots.block_metadata_updated_at END,
+                    vote_count = EXCLUDED.vote_count,
+                    vote_transactions = EXCLUDED.vote_transactions
             "#;
 
             client
@@ -304,8 +378,8 @@ async fn process_slot_batch(
                         &parent_bank_hash,
                         &(*signature_count as i64),
                         &last_blockhash,
-                        &delta_lthash,
                         &cumulative_lthash,
+                        &delta_lthash,
                         &accounts_delta_hash,
                         &accounts_lthash_checksum,
                         &epoch_accounts_hash,
@@ -314,9 +388,34 @@ async fn process_slot_batch(
                         &executed_transaction_count.map(|c| c as i64),
                         &entry_count.map(|c| c as i64),
                         &blockhash.as_ref().map(|_| chrono::Utc::now()),
+                        &(vote_transactions.len() as i32),
+                        &vote_info,
                     ],
                 )
                 .await?;
+
+            // Insert individual vote transactions
+            for vote_tx in vote_transactions {
+                let vote_query = r#"
+                    INSERT INTO vote_transactions (
+                        slot, voter_pubkey, vote_signature, vote_transaction, transaction_meta
+                    ) VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (slot, voter_pubkey, vote_signature) DO NOTHING
+                "#;
+                
+                client
+                    .execute(
+                        vote_query,
+                        &[
+                            &(*slot as i64),
+                            &vote_tx.voter_pubkey,
+                            &vote_tx.vote_signature,
+                            &vote_tx.vote_transaction,
+                            &vote_tx.transaction_meta,
+                        ],
+                    )
+                    .await?;
+            }
 
             count += 1;
         }
@@ -345,6 +444,7 @@ async fn process_account_changes_batch(
                         old_lamports, old_owner, old_executable, old_rent_epoch, old_data, old_lthash,
                         new_lamports, new_owner, new_executable, new_rent_epoch, new_data, new_lthash
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                    ON CONFLICT (slot, account_pubkey, write_version) DO NOTHING
                 "#;
 
                 client
@@ -353,79 +453,54 @@ async fn process_account_changes_batch(
                         &[
                             &(*slot as i64),
                             &change.pubkey.to_string(),
-                            &0i64, // write_version not available in OwnedAccountChange
+                            &(change.write_version as i64),
                             &(change.old_account.lamports() as i64),
                             &change.old_account.owner().to_string(),
                             &change.old_account.executable(),
                             &(change.old_account.rent_epoch() as i64),
                             &change.old_account.data(),
-                            &change
-                                .old_lthash
-                                .0
-                                .iter()
-                                .flat_map(|&x| x.to_le_bytes())
-                                .collect::<Vec<u8>>(),
+                            &change.old_lthash.0.as_slice(),
                             &(change.new_account.lamports() as i64),
                             &change.new_account.owner().to_string(),
                             &change.new_account.executable(),
                             &(change.new_account.rent_epoch() as i64),
                             &change.new_account.data(),
-                            &change
-                                .new_lthash
-                                .0
-                                .iter()
-                                .flat_map(|&x| x.to_le_bytes())
-                                .collect::<Vec<u8>>(),
+                            &change.new_lthash.0.as_slice(),
                         ],
                     )
                     .await?;
-
-                // Update account change statistics
+                
+                // Update monitored account tracking
+                let update_query = r#"
+                    UPDATE monitored_accounts 
+                    SET last_seen_slot = $1, 
+                        last_seen_at = NOW(), 
+                        total_changes_tracked = total_changes_tracked + 1,
+                        total_data_bytes = total_data_bytes + $2
+                    WHERE account_pubkey = $3
+                "#;
+                
+                client.execute(
+                    update_query,
+                    &[&(*slot as i64), &total_data_size, &change.pubkey.to_string()]
+                ).await?;
+                
+                // Insert account change stats
                 let stats_query = r#"
                     INSERT INTO account_change_stats (
                         account_pubkey, slot, change_count, old_data_size, new_data_size, total_data_size
                     ) VALUES ($1, $2, 1, $3, $4, $5)
-                    ON CONFLICT (account_pubkey, slot) DO UPDATE SET
-                        change_count = account_change_stats.change_count + 1,
+                    ON CONFLICT (account_pubkey, slot) DO UPDATE
+                    SET change_count = account_change_stats.change_count + 1,
                         old_data_size = account_change_stats.old_data_size + EXCLUDED.old_data_size,
                         new_data_size = account_change_stats.new_data_size + EXCLUDED.new_data_size,
                         total_data_size = account_change_stats.total_data_size + EXCLUDED.total_data_size
                 "#;
-
-                client
-                    .execute(
-                        stats_query,
-                        &[
-                            &change.pubkey.to_string(),
-                            &(*slot as i64),
-                            &old_data_size,
-                            &new_data_size,
-                            &total_data_size,
-                        ],
-                    )
-                    .await?;
-
-                // Update monitored accounts table
-                let update_query = r#"
-                    UPDATE monitored_accounts 
-                    SET 
-                        last_seen_slot = $2,
-                        last_seen_at = NOW(),
-                        total_changes_tracked = total_changes_tracked + 1,
-                        total_data_bytes = total_data_bytes + $3
-                    WHERE account_pubkey = $1
-                "#;
-
-                client
-                    .execute(
-                        update_query,
-                        &[
-                            &change.pubkey.to_string(),
-                            &(*slot as i64),
-                            &total_data_size,
-                        ],
-                    )
-                    .await?;
+                
+                client.execute(
+                    stats_query,
+                    &[&change.pubkey.to_string(), &(*slot as i64), &old_data_size, &new_data_size, &total_data_size]
+                ).await?;
 
                 count += 1;
             }
@@ -445,8 +520,8 @@ async fn process_proof_requests_batch(
         if let DbWriteCommand::ProofRequests { requests } = cmd {
             for request in requests {
                 let query = r#"
-                    INSERT INTO proof_requests (slot, account_pubkey)
-                    VALUES ($1, $2)
+                    INSERT INTO proof_requests (slot, account_pubkey, status)
+                    VALUES ($1, $2, 'pending')
                 "#;
 
                 client
@@ -469,16 +544,17 @@ async fn process_slot_status_updates(
 
     for cmd in updates {
         if let DbWriteCommand::SlotStatusUpdate { slot, status } = cmd {
+            // Determine which timestamp field to update
             let timestamp_field = match status.as_str() {
                 "first_shred_received" => "first_shred_received_at",
                 "completed" => "completed_at",
                 "processed" => "processed_at",
                 "confirmed" => "confirmed_at",
                 "rooted" => "rooted_at",
-                _ => continue,
+                _ => "rooted_at", // Default
             };
 
-            // First try to update existing slot record
+            // First try to update existing slot
             let update_query = format!(
                 "UPDATE slots SET status = $1, {} = NOW() WHERE slot = $2",
                 timestamp_field
@@ -503,6 +579,152 @@ async fn process_slot_status_updates(
             }
 
             count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+async fn process_epoch_stakes_batch(
+    client: &deadpool_postgres::Object,
+    stakes: &[DbWriteCommand],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    for cmd in stakes {
+        if let DbWriteCommand::EpochStakes { epoch, stakes } = cmd {
+            for stake in stakes {
+                let query = r#"
+                    INSERT INTO epoch_stakes (
+                        epoch, validator_pubkey, stake_amount, stake_percentage, total_epoch_stake
+                    ) VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (epoch, validator_pubkey) DO UPDATE SET
+                        stake_amount = EXCLUDED.stake_amount,
+                        stake_percentage = EXCLUDED.stake_percentage,
+                        total_epoch_stake = EXCLUDED.total_epoch_stake,
+                        updated_at = NOW()
+                "#;
+                
+                client
+                    .execute(
+                        query,
+                        &[
+                            &(*epoch as i64),
+                            &stake.validator_pubkey,
+                            &(stake.stake_amount as i64),
+                            &stake.stake_percentage,
+                            &(stake.total_epoch_stake as i64),
+                        ],
+                    )
+                    .await?;
+                
+                count += 1;
+            }
+        }
+    }
+
+    Ok(count)
+}
+
+async fn process_stake_accounts_batch(
+    client: &deadpool_postgres::Object,
+    stake_accounts: &[DbWriteCommand],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    for cmd in stake_accounts {
+        if let DbWriteCommand::StakeAccountChange { slot, stake_info, lthash } = cmd {
+            let query = r#"
+                INSERT INTO stake_account_states (
+                    slot, stake_pubkey, voter_pubkey, stake_amount, 
+                    activation_epoch, deactivation_epoch, credits_observed,
+                    rent_exempt_reserve, staker, withdrawer, state_type, lthash
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                ON CONFLICT (slot, stake_pubkey) DO UPDATE SET
+                    voter_pubkey = EXCLUDED.voter_pubkey,
+                    stake_amount = EXCLUDED.stake_amount,
+                    activation_epoch = EXCLUDED.activation_epoch,
+                    deactivation_epoch = EXCLUDED.deactivation_epoch,
+                    credits_observed = EXCLUDED.credits_observed,
+                    rent_exempt_reserve = EXCLUDED.rent_exempt_reserve,
+                    staker = EXCLUDED.staker,
+                    withdrawer = EXCLUDED.withdrawer,
+                    state_type = EXCLUDED.state_type,
+                    lthash = EXCLUDED.lthash
+            "#;
+            
+            client
+                .execute(
+                    query,
+                    &[
+                        &(*slot as i64),
+                        &stake_info.stake_pubkey,
+                        &stake_info.voter_pubkey,
+                        &(stake_info.stake_amount as i64),
+                        &stake_info.activation_epoch.map(|e| e as i64),
+                        &stake_info.deactivation_epoch.map(|e| e as i64),
+                        &stake_info.credits_observed.map(|c| c as i64),
+                        &(stake_info.rent_exempt_reserve as i64),
+                        &stake_info.staker,
+                        &stake_info.withdrawer,
+                        &stake_info.state_type,
+                        &lthash,
+                    ],
+                )
+                .await?;
+            
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+async fn process_epoch_validators_batch(
+    client: &deadpool_postgres::Object,
+    validators: &[DbWriteCommand],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut count = 0;
+
+    for cmd in validators {
+        if let DbWriteCommand::EpochValidatorSet { 
+            epoch, 
+            epoch_start_slot, 
+            epoch_end_slot, 
+            computed_at_slot,
+            validators 
+        } = cmd {
+            for validator in validators {
+                let query = r#"
+                    INSERT INTO epoch_validator_sets (
+                        epoch, epoch_start_slot, epoch_end_slot, validator_pubkey, 
+                        total_stake, stake_percentage, total_epoch_stake, computed_at_slot
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    ON CONFLICT (epoch, validator_pubkey) DO UPDATE SET
+                        total_stake = EXCLUDED.total_stake,
+                        stake_percentage = EXCLUDED.stake_percentage,
+                        total_epoch_stake = EXCLUDED.total_epoch_stake,
+                        computed_at_slot = EXCLUDED.computed_at_slot
+                "#;
+                
+                client
+                    .execute(
+                        query,
+                        &[
+                            &(*epoch as i64),
+                            &(*epoch_start_slot as i64),
+                            &(*epoch_end_slot as i64),
+                            &validator.validator_pubkey,
+                            &(validator.total_stake as i64),
+                            &validator.stake_percentage,
+                            &(validator.total_epoch_stake as i64),
+                            &(*computed_at_slot as i64),
+                        ],
+                    )
+                    .await?;
+                
+                count += 1;
+            }
         }
     }
 

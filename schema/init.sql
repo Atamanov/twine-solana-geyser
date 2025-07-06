@@ -272,3 +272,193 @@ SELECT create_hypertable('account_change_stats', 'created_at',
 
 -- Set up retention policy for 7 days on account change stats
 SELECT add_retention_policy('account_change_stats', INTERVAL '7 days');
+
+-- Create table for vote transactions
+CREATE TABLE IF NOT EXISTS vote_transactions (
+    slot BIGINT NOT NULL,
+    voter_pubkey VARCHAR(88) NOT NULL,
+    vote_signature VARCHAR(88) NOT NULL,
+    vote_transaction BYTEA NOT NULL,  -- Serialized transaction
+    transaction_meta JSONB,           -- Transaction metadata (compute units, etc)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (slot, voter_pubkey, vote_signature)
+);
+
+-- Convert to hypertable for time-series efficiency
+SELECT create_hypertable('vote_transactions', 'slot', 
+    chunk_time_interval => 100000,
+    if_not_exists => TRUE);
+
+-- Create indexes for vote transactions
+CREATE INDEX idx_vote_transactions_voter ON vote_transactions(voter_pubkey, slot DESC);
+CREATE INDEX idx_vote_transactions_signature ON vote_transactions(vote_signature);
+CREATE INDEX idx_vote_transactions_created ON vote_transactions(created_at DESC);
+
+-- Create table for epoch validator stakes
+CREATE TABLE IF NOT EXISTS epoch_stakes (
+    epoch BIGINT NOT NULL,
+    validator_pubkey VARCHAR(88) NOT NULL,
+    stake_amount BIGINT NOT NULL,
+    stake_percentage NUMERIC(5,2),  -- Percentage of total stake
+    total_epoch_stake BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (epoch, validator_pubkey)
+);
+
+-- Create indexes for epoch stakes
+CREATE INDEX idx_epoch_stakes_validator ON epoch_stakes(validator_pubkey, epoch DESC);
+CREATE INDEX idx_epoch_stakes_amount ON epoch_stakes(stake_amount DESC);
+
+-- Add vote transaction columns to slots table
+ALTER TABLE slots ADD COLUMN IF NOT EXISTS vote_count INTEGER DEFAULT 0;
+ALTER TABLE slots ADD COLUMN IF NOT EXISTS vote_transactions JSONB;
+
+-- Create table for stake account states
+CREATE TABLE IF NOT EXISTS stake_account_states (
+    slot BIGINT NOT NULL,
+    stake_pubkey VARCHAR(88) NOT NULL,
+    voter_pubkey VARCHAR(88),
+    stake_amount BIGINT NOT NULL,
+    activation_epoch BIGINT,
+    deactivation_epoch BIGINT,
+    credits_observed BIGINT,
+    rent_exempt_reserve BIGINT,
+    staker VARCHAR(88),
+    withdrawer VARCHAR(88),
+    state_type VARCHAR(20) NOT NULL, -- 'uninitialized', 'initialized', 'stake', 'rewards_pool'
+    lthash BYTEA NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (slot, stake_pubkey)
+);
+
+-- Convert to hypertable
+SELECT create_hypertable('stake_account_states', 'slot', 
+    chunk_time_interval => 100000,
+    if_not_exists => TRUE);
+
+-- Create indexes
+CREATE INDEX idx_stake_states_voter ON stake_account_states(voter_pubkey, slot DESC);
+CREATE INDEX idx_stake_states_epoch ON stake_account_states(activation_epoch);
+CREATE INDEX idx_stake_states_created ON stake_account_states(created_at DESC);
+
+-- Create table for epoch validator sets (computed at epoch boundaries)
+CREATE TABLE IF NOT EXISTS epoch_validator_sets (
+    epoch BIGINT NOT NULL,
+    epoch_start_slot BIGINT NOT NULL,
+    epoch_end_slot BIGINT NOT NULL,
+    validator_pubkey VARCHAR(88) NOT NULL,
+    total_stake BIGINT NOT NULL,
+    stake_percentage NUMERIC(5,2),
+    total_epoch_stake BIGINT NOT NULL,
+    computed_at_slot BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (epoch, validator_pubkey)
+);
+
+-- Create indexes
+CREATE INDEX idx_epoch_validator_sets_validator ON epoch_validator_sets(validator_pubkey, epoch DESC);
+CREATE INDEX idx_epoch_validator_sets_stake ON epoch_validator_sets(total_stake DESC);
+
+-- Create view for recent votes with stake information
+CREATE OR REPLACE VIEW recent_votes_with_stakes AS
+WITH latest_epoch AS (
+    SELECT MAX(epoch) as current_epoch FROM epoch_validator_sets
+),
+recent_votes AS (
+    SELECT 
+        v.slot,
+        v.voter_pubkey,
+        v.vote_signature,
+        v.created_at,
+        ROW_NUMBER() OVER (PARTITION BY v.voter_pubkey ORDER BY v.slot DESC) as rn
+    FROM vote_transactions v
+    WHERE v.created_at > NOW() - INTERVAL '1 hour'
+)
+SELECT 
+    rv.slot,
+    rv.voter_pubkey,
+    rv.vote_signature,
+    rv.created_at,
+    COALESCE(evs.total_stake, 0) as validator_stake,
+    COALESCE(evs.stake_percentage, 0) as stake_percentage,
+    evs.epoch,
+    CASE 
+        WHEN evs.validator_pubkey IS NOT NULL THEN 'active'
+        ELSE 'inactive'
+    END as validator_status
+FROM recent_votes rv
+LEFT JOIN latest_epoch le ON true
+LEFT JOIN epoch_validator_sets evs ON rv.voter_pubkey = evs.validator_pubkey 
+    AND evs.epoch = le.current_epoch
+WHERE rv.rn = 1
+ORDER BY rv.slot DESC;
+
+-- Create materialized view for vote participation stats
+CREATE MATERIALIZED VIEW IF NOT EXISTS vote_participation_stats AS
+WITH time_windows AS (
+    SELECT 
+        '5 minutes' as window,
+        NOW() - INTERVAL '5 minutes' as start_time
+    UNION ALL
+    SELECT 
+        '30 minutes' as window,
+        NOW() - INTERVAL '30 minutes' as start_time
+    UNION ALL
+    SELECT 
+        '1 hour' as window,
+        NOW() - INTERVAL '1 hour' as start_time
+),
+latest_epoch_data AS (
+    SELECT 
+        epoch,
+        validator_pubkey,
+        total_stake,
+        stake_percentage,
+        total_epoch_stake
+    FROM epoch_validator_sets
+    WHERE epoch = (SELECT MAX(epoch) FROM epoch_validator_sets)
+),
+vote_counts AS (
+    SELECT 
+        tw.window,
+        vt.voter_pubkey,
+        COUNT(*) as vote_count,
+        MAX(vt.slot) as last_vote_slot
+    FROM time_windows tw
+    CROSS JOIN vote_transactions vt
+    WHERE vt.created_at >= tw.start_time
+    GROUP BY tw.window, vt.voter_pubkey
+)
+SELECT 
+    vc.window,
+    COUNT(DISTINCT vc.voter_pubkey) as voting_validators,
+    COUNT(DISTINCT led.validator_pubkey) as total_validators,
+    SUM(CASE WHEN vc.voter_pubkey IS NOT NULL THEN led.total_stake ELSE 0 END) as voting_stake,
+    MAX(led.total_epoch_stake) as total_epoch_stake,
+    ROUND(
+        100.0 * SUM(CASE WHEN vc.voter_pubkey IS NOT NULL THEN led.total_stake ELSE 0 END) / 
+        NULLIF(MAX(led.total_epoch_stake), 0), 
+        2
+    ) as voting_stake_percentage,
+    NOW() as last_updated
+FROM vote_counts vc
+RIGHT JOIN latest_epoch_data led ON vc.voter_pubkey = led.validator_pubkey
+GROUP BY vc.window
+ORDER BY vc.window;
+
+-- Create index for materialized view refresh
+CREATE INDEX idx_vote_participation_stats_window ON vote_participation_stats(window);
+
+-- Refresh policy for materialized view
+CREATE OR REPLACE FUNCTION refresh_vote_participation_stats()
+RETURNS void AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY vote_participation_stats;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create a scheduled job to refresh the materialized view every minute
+-- Note: Requires pg_cron extension - uncomment if available
+-- CREATE EXTENSION IF NOT EXISTS pg_cron;
+-- SELECT cron.schedule('refresh-vote-stats', '* * * * *', 'SELECT refresh_vote_participation_stats();');

@@ -7,6 +7,14 @@ use std::sync::atomic::AtomicUsize;
 pub type Slot = u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoteTransaction {
+    pub voter_pubkey: String,
+    pub vote_signature: String,
+    pub vote_transaction: Vec<u8>,  // Serialized transaction
+    pub transaction_meta: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OwnedReplicaAccountInfo {
     pub pubkey: Pubkey,
     pub lamports: u64,
@@ -96,6 +104,8 @@ pub struct AirlockSlotData {
     pub status: parking_lot::RwLock<String>,
     /// Timestamp when slot was created
     pub created_at: std::time::Instant,
+    /// Vote transactions in this slot
+    pub vote_transactions: parking_lot::RwLock<Vec<VoteTransaction>>,
 }
 
 impl SlotAirlock {
@@ -123,6 +133,7 @@ impl AirlockSlotData {
             entry_count: parking_lot::RwLock::new(None),
             status: parking_lot::RwLock::new("created".to_string()),
             created_at: std::time::Instant::now(),
+            vote_transactions: parking_lot::RwLock::new(Vec::new()),
         }
     }
 
@@ -275,6 +286,8 @@ pub enum DbWriteCommand {
         parent_slot: Option<u64>,
         executed_transaction_count: Option<u64>,
         entry_count: Option<u64>,
+        // Vote transactions
+        vote_transactions: Vec<VoteTransaction>,
     },
     SlotStatusUpdate {
         slot: u64,
@@ -287,7 +300,53 @@ pub enum DbWriteCommand {
     ProofRequests {
         requests: Vec<ProofRequest>,
     },
+    EpochStakes {
+        epoch: u64,
+        stakes: Vec<ValidatorStake>,
+    },
+    StakeAccountChange {
+        slot: u64,
+        stake_info: StakeAccountInfo,
+        lthash: Vec<u8>,
+    },
+    EpochValidatorSet {
+        epoch: u64,
+        epoch_start_slot: u64,
+        epoch_end_slot: u64,
+        computed_at_slot: u64,
+        validators: Vec<EpochValidator>,
+    },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StakeAccountInfo {
+    pub stake_pubkey: String,
+    pub voter_pubkey: Option<String>,
+    pub stake_amount: u64,
+    pub activation_epoch: Option<u64>,
+    pub deactivation_epoch: Option<u64>,
+    pub credits_observed: Option<u64>,
+    pub rent_exempt_reserve: u64,
+    pub staker: Option<String>,
+    pub withdrawer: Option<String>,
+    pub state_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EpochValidator {
+    pub validator_pubkey: String,
+    pub total_stake: u64,
+    pub stake_percentage: f64,
+    pub total_epoch_stake: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorStake {
+    pub validator_pubkey: String,
+    pub stake_amount: u64,
+    pub stake_percentage: f64,
+    pub total_epoch_stake: u64,
 }
 
 #[derive(Debug)]
