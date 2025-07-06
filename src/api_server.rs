@@ -167,7 +167,12 @@ async fn add_monitored_account(
     data: web::Data<ApiState>,
     req: web::Json<AddAccountRequest>,
 ) -> Result<HttpResponse> {
-    match Pubkey::from_str(&req.pubkey) {
+    // Trim whitespace and common terminal escape sequences
+    let cleaned_pubkey = req.pubkey.trim()
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string();
+    
+    match Pubkey::from_str(&cleaned_pubkey) {
         Ok(pubkey) => {
             let is_new = data.monitored_accounts.insert(pubkey);
             
@@ -176,25 +181,25 @@ async fn add_monitored_account(
                 metadata.insert(pubkey, chrono::Utc::now());
                 
                 // Persist to database
-                match persist_account_to_db(&data.db_config, &req.pubkey).await {
+                match persist_account_to_db(&data.db_config, &cleaned_pubkey).await {
                     Ok(_) => {
-                        info!("Added monitored account to DB: {}", req.pubkey);
+                        info!("Added monitored account to DB: {}", cleaned_pubkey);
                     }
                     Err(e) => {
-                        error!("Failed to persist account to DB: {} - {}", req.pubkey, e);
+                        error!("Failed to persist account to DB: {} - {}", cleaned_pubkey, e);
                         // Continue anyway - account is in memory
                     }
                 }
                 
-                info!("Added monitored account: {}", req.pubkey);
+                info!("Added monitored account: {}", cleaned_pubkey);
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: true,
-                    message: format!("Account {} added to monitoring", req.pubkey),
+                    message: format!("Account {} added to monitoring", cleaned_pubkey),
                 }))
             } else {
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: false,
-                    message: format!("Account {} is already being monitored", req.pubkey),
+                    message: format!("Account {} is already being monitored", cleaned_pubkey),
                 }))
             }
         }
@@ -232,7 +237,12 @@ async fn remove_monitored_account(
     data: web::Data<ApiState>,
     req: web::Json<RemoveAccountRequest>,
 ) -> Result<HttpResponse> {
-    match Pubkey::from_str(&req.pubkey) {
+    // Trim whitespace and common terminal escape sequences
+    let cleaned_pubkey = req.pubkey.trim()
+        .trim_end_matches(|c: char| !c.is_alphanumeric())
+        .to_string();
+    
+    match Pubkey::from_str(&cleaned_pubkey) {
         Ok(pubkey) => {
             let removed = data.monitored_accounts.remove(&pubkey).is_some();
             
@@ -241,24 +251,24 @@ async fn remove_monitored_account(
                 metadata.remove(&pubkey);
                 
                 // Update database - set active to false
-                match deactivate_account_in_db(&data.db_config, &req.pubkey).await {
+                match deactivate_account_in_db(&data.db_config, &cleaned_pubkey).await {
                     Ok(_) => {
-                        info!("Deactivated monitored account in DB: {}", req.pubkey);
+                        info!("Deactivated monitored account in DB: {}", cleaned_pubkey);
                     }
                     Err(e) => {
-                        error!("Failed to deactivate account in DB: {} - {}", req.pubkey, e);
+                        error!("Failed to deactivate account in DB: {} - {}", cleaned_pubkey, e);
                     }
                 }
                 
-                info!("Removed monitored account: {}", req.pubkey);
+                info!("Removed monitored account: {}", cleaned_pubkey);
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: true,
-                    message: format!("Account {} removed from monitoring", req.pubkey),
+                    message: format!("Account {} removed from monitoring", cleaned_pubkey),
                 }))
             } else {
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: false,
-                    message: format!("Account {} was not being monitored", req.pubkey),
+                    message: format!("Account {} was not being monitored", cleaned_pubkey),
                 }))
             }
         }
