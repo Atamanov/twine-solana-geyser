@@ -398,15 +398,15 @@ ORDER BY rv.slot DESC;
 CREATE MATERIALIZED VIEW IF NOT EXISTS vote_participation_stats AS
 WITH time_windows AS (
     SELECT 
-        '5 minutes' as window,
+        '5 minutes' as "window",
         NOW() - INTERVAL '5 minutes' as start_time
     UNION ALL
     SELECT 
-        '30 minutes' as window,
+        '30 minutes' as "window",
         NOW() - INTERVAL '30 minutes' as start_time
     UNION ALL
     SELECT 
-        '1 hour' as window,
+        '1 hour' as "window",
         NOW() - INTERVAL '1 hour' as start_time
 ),
 latest_epoch_data AS (
@@ -421,17 +421,17 @@ latest_epoch_data AS (
 ),
 vote_counts AS (
     SELECT 
-        tw.window,
+        tw."window",
         vt.voter_pubkey,
         COUNT(*) as vote_count,
         MAX(vt.slot) as last_vote_slot
     FROM time_windows tw
     CROSS JOIN vote_transactions vt
     WHERE vt.created_at >= tw.start_time
-    GROUP BY tw.window, vt.voter_pubkey
+    GROUP BY tw."window", vt.voter_pubkey
 )
 SELECT 
-    vc.window,
+    vc."window",
     COUNT(DISTINCT vc.voter_pubkey) as voting_validators,
     COUNT(DISTINCT led.validator_pubkey) as total_validators,
     SUM(CASE WHEN vc.voter_pubkey IS NOT NULL THEN led.total_stake ELSE 0 END) as voting_stake,
@@ -444,11 +444,11 @@ SELECT
     NOW() as last_updated
 FROM vote_counts vc
 RIGHT JOIN latest_epoch_data led ON vc.voter_pubkey = led.validator_pubkey
-GROUP BY vc.window
-ORDER BY vc.window;
+GROUP BY vc."window"
+ORDER BY vc."window";
 
 -- Create index for materialized view refresh
-CREATE INDEX idx_vote_participation_stats_window ON vote_participation_stats(window);
+CREATE INDEX idx_vote_participation_stats_window ON vote_participation_stats("window");
 
 -- Refresh policy for materialized view
 CREATE OR REPLACE FUNCTION refresh_vote_participation_stats()
@@ -462,3 +462,24 @@ $$ LANGUAGE plpgsql;
 -- Note: Requires pg_cron extension - uncomment if available
 -- CREATE EXTENSION IF NOT EXISTS pg_cron;
 -- SELECT cron.schedule('refresh-vote-stats', '* * * * *', 'SELECT refresh_vote_participation_stats();');
+
+-- Alternative: Create a trigger to refresh on new vote transactions
+CREATE OR REPLACE FUNCTION trigger_refresh_vote_stats()
+RETURNS trigger AS $$
+BEGIN
+    -- Only refresh if enough time has passed since last refresh
+    IF NOT EXISTS (
+        SELECT 1 FROM vote_participation_stats 
+        WHERE last_updated > NOW() - INTERVAL '30 seconds'
+    ) THEN
+        PERFORM refresh_vote_participation_stats();
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger on vote_transactions table (optional - may impact performance)
+-- CREATE TRIGGER refresh_vote_stats_trigger
+-- AFTER INSERT ON vote_transactions
+-- FOR EACH STATEMENT
+-- EXECUTE FUNCTION trigger_refresh_vote_stats();

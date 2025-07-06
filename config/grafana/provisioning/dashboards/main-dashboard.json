@@ -1703,7 +1703,7 @@
         "x": 0,
         "y": 41
       },
-      "id": 106,
+      "id": 110,
       "panels": [],
       "title": "Vote Participation & Stake Coverage",
       "type": "row"
@@ -1746,7 +1746,7 @@
         "x": 0,
         "y": 42
       },
-      "id": 107,
+      "id": 111,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -1774,7 +1774,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT voting_stake_percentage\nFROM vote_participation_stats\nWHERE window = '5 minutes'\nORDER BY last_updated DESC\nLIMIT 1",
+          "rawSql": "SELECT voting_stake_percentage\nFROM vote_participation_stats\nWHERE \"window\" = '5 minutes'\nORDER BY last_updated DESC\nLIMIT 1",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1863,7 +1863,7 @@
         "x": 6,
         "y": 42
       },
-      "id": 108,
+      "id": 112,
       "options": {
         "legend": {
           "calcs": ["mean", "last"],
@@ -1885,7 +1885,7 @@
           "editorMode": "code",
           "format": "time_series",
           "rawQuery": true,
-          "rawSql": "SELECT \n  last_updated AS time,\n  window AS metric,\n  voting_stake_percentage AS value\nFROM vote_participation_stats\nORDER BY last_updated",
+          "rawSql": "SELECT \n  last_updated AS time,\n  voting_stake_percentage AS value,\n  \"window\" AS metric\nFROM vote_participation_stats\nWHERE last_updated > NOW() - INTERVAL '1 hour'\nORDER BY last_updated, \"window\"",
           "refId": "A",
           "sql": {
             "columns": [
@@ -1999,7 +1999,7 @@
         "x": 0,
         "y": 50
       },
-      "id": 109,
+      "id": 113,
       "options": {
         "cellHeight": "sm",
         "footer": {
