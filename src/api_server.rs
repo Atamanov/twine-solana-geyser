@@ -40,10 +40,10 @@ pub struct ApiState {
     pub account_metadata: Arc<RwLock<std::collections::HashMap<Pubkey, chrono::DateTime<chrono::Utc>>>>,
 }
 
-pub async fn start_api_server(
+pub fn start_api_server(
     monitored_accounts: Arc<DashSet<Pubkey>>,
     api_port: u16,
-) -> std::io::Result<()> {
+) {
     let account_metadata = Arc::new(RwLock::new(std::collections::HashMap::new()));
     
     let state = web::Data::new(ApiState {
@@ -53,17 +53,24 @@ pub async fn start_api_server(
 
     info!("Starting API server on port {}", api_port);
 
-    HttpServer::new(move || {
-        App::new()
-            .app_data(state.clone())
-            .route("/api/monitored-accounts", web::get().to(get_monitored_accounts))
-            .route("/api/monitored-accounts", web::post().to(add_monitored_account))
-            .route("/api/monitored-accounts", web::delete().to(remove_monitored_account))
-            .route("/api/health", web::get().to(health_check))
-    })
-    .bind(("0.0.0.0", api_port))?
-    .run()
-    .await
+    // Run actix-web in a separate thread with its own runtime
+    std::thread::spawn(move || {
+        let sys = actix_web::rt::System::new();
+        
+        let server = HttpServer::new(move || {
+            App::new()
+                .app_data(state.clone())
+                .route("/api/monitored-accounts", web::get().to(get_monitored_accounts))
+                .route("/api/monitored-accounts", web::post().to(add_monitored_account))
+                .route("/api/monitored-accounts", web::delete().to(remove_monitored_account))
+                .route("/api/health", web::get().to(health_check))
+        })
+        .bind(("0.0.0.0", api_port))
+        .expect("Failed to bind API server")
+        .run();
+        
+        sys.block_on(server).expect("API server failed");
+    });
 }
 
 async fn health_check() -> Result<HttpResponse> {

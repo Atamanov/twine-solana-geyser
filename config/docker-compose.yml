@@ -1,0 +1,74 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_DB: twine_solana_db
+      POSTGRES_USER: geyser_writer
+      POSTGRES_PASSWORD: geyser_writer_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ../schema/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - twine-network
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      # White labeling / branding
+      - GF_SERVER_APP_NAME=Twine Geyser Plugin
+      - GF_SERVER_APP_SUBTITLE=Solana Monitoring
+      # Logo customization using environment variables (Grafana 9+)
+      - GF_UI_LOGO_URL=/public/img/custom_logo.png
+      - GF_UI_FAVICON_URL=/public/img/custom_logo.png
+      - GF_UI_APPLE_TOUCH_ICON_URL=/public/img/custom_logo.png
+      - GF_UI_LOADING_LOGO_URL=/public/img/custom_logo.png
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini
+      # Mount custom logo - copy it to Grafana's public directory
+      - ./logo_small.png:/usr/share/grafana/public/img/custom_logo.png
+      # Also replace the default logos
+      - ./logo_small.png:/usr/share/grafana/public/img/grafana_icon.svg
+      - ./logo_small.png:/usr/share/grafana/public/img/grafana_com_auth_icon.svg
+      - ./logo_small.png:/usr/share/grafana/public/img/grafana_net_logo.svg
+      - ./logo_small.png:/usr/share/grafana/public/img/grafana_mask_icon.svg
+    networks:
+      - twine-network
+    depends_on:
+      - timescaledb
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - twine-network
+
+volumes:
+  timescale_data:
+  grafana_data:
+  prometheus_data:
+
+networks:
+  twine-network:
+    driver: bridge

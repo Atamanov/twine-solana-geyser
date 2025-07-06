@@ -196,6 +196,7 @@ impl Default for PluginConfig {
             max_queue_size: 10000,
             batch_size: 1000,
             batch_timeout_ms: 100,
+            api_port: None,
             proof_scheduling_slot_interval: 10,
             metrics_port: 9091,
             network_mode: NetworkMode::Mainnet,

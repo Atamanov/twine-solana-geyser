@@ -908,25 +908,23 @@ impl TwineGeyserPlugin {
             }
         };
 
-        let runtime = match self.runtime.as_ref() {
-            Some(rt) => rt,
-            None => {
-                error!("Cannot start API server: runtime not initialized");
-                return;
-            }
-        };
-
-        let handle = runtime.spawn(async move {
-            if let Err(e) = crate::api_server::start_api_server(monitored_accounts, api_port).await {
-                error!("API server error: {}", e);
-            }
-        });
-
-        self.api_server = Some(handle);
+        // API server starts in its own thread
+        crate::api_server::start_api_server(monitored_accounts, api_port);
+        
+        // Since it runs in a separate thread, we don't need to track the handle
+        // in the same way. Set a dummy handle to indicate it's running.
+        if let Some(runtime) = self.runtime.as_ref() {
+            self.api_server = Some(runtime.spawn(async {
+                // Dummy task to indicate API server is running
+                loop {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                }
+            }));
+        }
     }
     
     fn sync_monitored_accounts_from_db(&self, config: &PluginConfig) {
-        use tokio_postgres::{NoTls, Client};
+        use tokio_postgres::NoTls;
         
         let db_config = format!(
             "host={} port={} user={} password={} dbname={}",
@@ -934,24 +932,28 @@ impl TwineGeyserPlugin {
         );
         
         // Use blocking connection for initial sync
-        if let Ok((mut client, connection)) = tokio_postgres::connect(&db_config, NoTls).map_err(|e| {
-            warn!("Failed to connect to database for syncing monitored accounts: {}", e);
-            e
-        }).ok().and_then(|result| {
-            // Spawn connection handler in background
-            std::thread::spawn(move || {
-                let runtime = Runtime::new().unwrap();
-                runtime.block_on(async {
-                    if let Err(e) = connection.await {
-                        error!("Database connection error during sync: {}", e);
-                    }
-                });
-            });
-            Some(result)
-        }) {
+        let runtime = Runtime::new().unwrap();
+        let result = runtime.block_on(async {
+            match tokio_postgres::connect(&db_config, NoTls).await {
+                Ok((client, connection)) => {
+                    // Spawn connection handler in background
+                    tokio::spawn(async move {
+                        if let Err(e) = connection.await {
+                            error!("Database connection error during sync: {}", e);
+                        }
+                    });
+                    Some(client)
+                }
+                Err(e) => {
+                    warn!("Failed to connect to database for syncing monitored accounts: {}", e);
+                    None
+                }
+            }
+        });
+        
+        if let Some(client) = result {
             // Run the query synchronously
-            let runtime = Runtime::new().unwrap();
-            let result = runtime.block_on(async {
+            let sync_result = runtime.block_on(async {
                 // First, insert accounts from config that don't exist
                 for account_str in &config.monitored_accounts {
                     let _ = client.execute(
@@ -967,7 +969,7 @@ impl TwineGeyserPlugin {
                 ).await
             });
             
-            match result {
+            match sync_result {
                 Ok(rows) => {
                     let mut count = 0;
                     for row in rows {
