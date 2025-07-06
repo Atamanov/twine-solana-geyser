@@ -238,8 +238,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus",
-        "uid": "$prometheus"
+        "type": "datasource",
+        "uid": "-- Mixed --"
       },
       "fieldConfig": {
         "defaults": {
@@ -300,10 +300,51 @@
             "uid": "$prometheus"
           },
           "editorMode": "code",
-          "expr": "twine_geyser_db_validator_slot_delta",
-          "legendFormat": "Delta",
+          "expr": "twine_geyser_validator_slot",
+          "hide": true,
+          "legendFormat": "validator_slot",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescale"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "hide": true,
+          "rawQuery": true,
+          "rawSql": "SELECT \n  NOW() as time,\n  MAX(slot) as db_slot \nFROM slots \nWHERE status = 'rooted'",
+          "refId": "B",
+          "sql": {
+            "columns": [
+              {
+                "parameters": [],
+                "type": "function"
+              }
+            ],
+            "groupBy": [
+              {
+                "property": {
+                  "type": "string"
+                },
+                "type": "groupBy"
+              }
+            ],
+            "limit": 50
+          }
+        },
+        {
+          "datasource": {
+            "type": "datasource",
+            "uid": "__expr__"
+          },
+          "expression": "$A - $B",
+          "hide": false,
+          "refId": "C",
+          "reducer": "last",
+          "mathExpression": true
         }
       ],
       "title": "DB Behind Validator",

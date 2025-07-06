@@ -900,16 +900,29 @@ impl TwineGeyserPlugin {
     
     fn start_api_server(&mut self) {
         let monitored_accounts = self.monitored_accounts.clone();
-        let api_port = match self.config.as_ref().and_then(|c| c.api_port) {
+        let config = match self.config.as_ref() {
+            Some(c) => c,
+            None => {
+                error!("Cannot start API server: config not available");
+                return;
+            }
+        };
+        
+        let api_port = match config.api_port {
             Some(port) => port,
             None => {
                 error!("Cannot start API server: api_port not configured");
                 return;
             }
         };
+        
+        let db_config = format!(
+            "host={} port={} user={} password={} dbname={}",
+            config.db_host, config.db_port, config.db_user, config.db_password, config.db_name
+        );
 
         // API server starts in its own thread
-        crate::api_server::start_api_server(monitored_accounts, api_port);
+        crate::api_server::start_api_server(monitored_accounts, api_port, db_config);
         
         // Since it runs in a separate thread, we don't need to track the handle
         // in the same way. Set a dummy handle to indicate it's running.

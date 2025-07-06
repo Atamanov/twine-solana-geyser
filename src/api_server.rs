@@ -38,17 +38,20 @@ struct ApiResponse {
 pub struct ApiState {
     pub monitored_accounts: Arc<DashSet<Pubkey>>,
     pub account_metadata: Arc<RwLock<std::collections::HashMap<Pubkey, chrono::DateTime<chrono::Utc>>>>,
+    pub db_config: String,
 }
 
 pub fn start_api_server(
     monitored_accounts: Arc<DashSet<Pubkey>>,
     api_port: u16,
+    db_config: String,
 ) {
     let account_metadata = Arc::new(RwLock::new(std::collections::HashMap::new()));
     
     let state = web::Data::new(ApiState {
         monitored_accounts,
         account_metadata,
+        db_config,
     });
 
     info!("Starting API server on port {}", api_port);
@@ -120,6 +123,17 @@ async fn add_monitored_account(
                 let mut metadata = data.account_metadata.write().await;
                 metadata.insert(pubkey, chrono::Utc::now());
                 
+                // Persist to database
+                match persist_account_to_db(&data.db_config, &req.pubkey).await {
+                    Ok(_) => {
+                        info!("Added monitored account to DB: {}", req.pubkey);
+                    }
+                    Err(e) => {
+                        error!("Failed to persist account to DB: {} - {}", req.pubkey, e);
+                        // Continue anyway - account is in memory
+                    }
+                }
+                
                 info!("Added monitored account: {}", req.pubkey);
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: true,
@@ -142,6 +156,26 @@ async fn add_monitored_account(
     }
 }
 
+async fn persist_account_to_db(db_config: &str, pubkey: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio_postgres::{NoTls, connect};
+    
+    let (client, connection) = connect(db_config, NoTls).await?;
+    
+    // Spawn connection handler
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            error!("Database connection error: {}", e);
+        }
+    });
+    
+    client.execute(
+        "INSERT INTO monitored_accounts (account_pubkey) VALUES ($1) ON CONFLICT (account_pubkey) DO NOTHING",
+        &[&pubkey],
+    ).await?;
+    
+    Ok(())
+}
+
 async fn remove_monitored_account(
     data: web::Data<ApiState>,
     req: web::Json<RemoveAccountRequest>,
@@ -153,6 +187,16 @@ async fn remove_monitored_account(
             if removed {
                 let mut metadata = data.account_metadata.write().await;
                 metadata.remove(&pubkey);
+                
+                // Update database - set active to false
+                match deactivate_account_in_db(&data.db_config, &req.pubkey).await {
+                    Ok(_) => {
+                        info!("Deactivated monitored account in DB: {}", req.pubkey);
+                    }
+                    Err(e) => {
+                        error!("Failed to deactivate account in DB: {} - {}", req.pubkey, e);
+                    }
+                }
                 
                 info!("Removed monitored account: {}", req.pubkey);
                 Ok(HttpResponse::Ok().json(&ApiResponse {
@@ -174,4 +218,23 @@ async fn remove_monitored_account(
             }))
         }
     }
+}
+
+async fn deactivate_account_in_db(db_config: &str, pubkey: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio_postgres::{NoTls, connect};
+    
+    let (client, connection) = connect(db_config, NoTls).await?;
+    
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            error!("Database connection error: {}", e);
+        }
+    });
+    
+    client.execute(
+        "UPDATE monitored_accounts SET active = false WHERE account_pubkey = $1",
+        &[&pubkey],
+    ).await?;
+    
+    Ok(())
 }
