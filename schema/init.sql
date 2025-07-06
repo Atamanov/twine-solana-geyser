@@ -365,21 +365,21 @@ CREATE OR REPLACE VIEW recent_votes_with_stakes AS
 WITH latest_epoch AS (
     SELECT MAX(epoch) as current_epoch FROM epoch_validator_sets
 ),
-recent_votes AS (
-    SELECT 
-        v.slot,
-        v.voter_pubkey,
-        v.vote_signature,
-        v.created_at,
-        ROW_NUMBER() OVER (PARTITION BY v.voter_pubkey ORDER BY v.slot DESC) as rn
-    FROM vote_transactions v
-    WHERE v.created_at > NOW() - INTERVAL '1 hour'
+latest_votes AS (
+    SELECT DISTINCT ON (voter_pubkey)
+        slot,
+        voter_pubkey,
+        vote_signature,
+        created_at
+    FROM vote_transactions
+    WHERE created_at > NOW() - INTERVAL '1 hour'
+    ORDER BY voter_pubkey, slot DESC
 )
 SELECT 
-    rv.slot,
-    rv.voter_pubkey,
-    rv.vote_signature,
-    rv.created_at,
+    lv.slot,
+    lv.voter_pubkey,
+    lv.vote_signature,
+    lv.created_at,
     COALESCE(evs.total_stake, 0) as validator_stake,
     COALESCE(evs.stake_percentage, 0) as stake_percentage,
     evs.epoch,
@@ -387,12 +387,11 @@ SELECT
         WHEN evs.validator_pubkey IS NOT NULL THEN 'active'
         ELSE 'inactive'
     END as validator_status
-FROM recent_votes rv
-LEFT JOIN latest_epoch le ON true
-LEFT JOIN epoch_validator_sets evs ON rv.voter_pubkey = evs.validator_pubkey 
+FROM latest_votes lv
+CROSS JOIN latest_epoch le
+LEFT JOIN epoch_validator_sets evs ON lv.voter_pubkey = evs.validator_pubkey 
     AND evs.epoch = le.current_epoch
-WHERE rv.rn = 1
-ORDER BY rv.slot DESC;
+ORDER BY lv.slot DESC;
 
 -- Create materialized view for vote participation stats
 CREATE MATERIALIZED VIEW IF NOT EXISTS vote_participation_stats AS
@@ -483,3 +482,24 @@ $$ LANGUAGE plpgsql;
 -- AFTER INSERT ON vote_transactions
 -- FOR EACH STATEMENT
 -- EXECUTE FUNCTION trigger_refresh_vote_stats();
+
+-- Alternative simpler view for recent votes if the above has issues
+CREATE OR REPLACE VIEW recent_votes_simple AS
+SELECT 
+    vt.slot,
+    vt.voter_pubkey,
+    vt.vote_signature,
+    vt.created_at,
+    evs.total_stake as validator_stake,
+    evs.stake_percentage,
+    evs.epoch,
+    CASE 
+        WHEN evs.validator_pubkey IS NOT NULL THEN 'active'
+        ELSE 'inactive'
+    END as validator_status
+FROM vote_transactions vt
+LEFT JOIN epoch_validator_sets evs ON vt.voter_pubkey = evs.validator_pubkey
+    AND evs.epoch = (SELECT MAX(epoch) FROM epoch_validator_sets)
+WHERE vt.created_at > NOW() - INTERVAL '1 hour'
+ORDER BY vt.slot DESC
+LIMIT 100;

@@ -34,6 +34,7 @@ show_help() {
     echo "  build      Build the Rust plugin"
     echo "  status     Show service status"
     echo "  init-db    Initialize or reinitialize database tables"
+    echo "  init-grafana Restart Grafana to reload dashboard configuration"
     echo "  help       Show this help"
     echo ""
 }
@@ -260,6 +261,50 @@ init_database() {
     fi
 }
 
+# Initialize/restart Grafana to reload dashboards
+init_grafana() {
+    print_info "Checking if Grafana container is running..."
+    
+    if ! docker ps | grep -q twine-grafana; then
+        print_error "Grafana container is not running. Please run './setup.sh start' first."
+        exit 1
+    fi
+    
+    print_info "Restarting Grafana to reload dashboard configuration..."
+    docker compose -f docker-compose.monitoring.yml restart grafana
+    
+    if [ $? -eq 0 ]; then
+        print_info "Grafana restarted successfully!"
+        
+        # Wait for Grafana to be ready
+        print_info "Waiting for Grafana to be ready..."
+        for i in {1..30}; do
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000/api/health | grep -q "200"; then
+                print_info "Grafana is ready!"
+                break
+            fi
+            if [ $i -eq 30 ]; then
+                print_warn "Grafana may still be starting up. Please check manually."
+            fi
+            sleep 2
+        done
+        
+        echo ""
+        print_info "Grafana has been restarted with the latest dashboard configuration."
+        print_info "Access Grafana at: http://localhost:3000 (username: admin, password: admin)"
+        print_info "The dashboard should now include the Vote Participation & Stake Coverage section."
+        
+        # Refresh materialized view if database is running
+        if docker ps | grep -q twine-timescaledb; then
+            print_info "Refreshing vote participation stats..."
+            docker exec twine-timescaledb psql -U geyser_writer -d twine_solana_db -c "SELECT refresh_vote_participation_stats();" 2>/dev/null || true
+        fi
+    else
+        print_error "Failed to restart Grafana"
+        exit 1
+    fi
+}
+
 # Main script
 check_requirements
 
@@ -291,6 +336,9 @@ case "$1" in
         ;;
     init-db)
         init_database
+        ;;
+    init-grafana)
+        init_grafana
         ;;
     help|--help|-h|"")
         show_help
