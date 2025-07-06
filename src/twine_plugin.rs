@@ -957,7 +957,7 @@ impl TwineGeyserPlugin {
                 // First, insert accounts from config that don't exist
                 for account_str in &config.monitored_accounts {
                     let _ = client.execute(
-                        "INSERT INTO monitored_accounts (account_pubkey) VALUES ($1) ON CONFLICT DO NOTHING",
+                        "INSERT INTO monitored_accounts (account_pubkey) VALUES ($1) ON CONFLICT (account_pubkey) DO NOTHING",
                         &[&account_str],
                     ).await;
                 }

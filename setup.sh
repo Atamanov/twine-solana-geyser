@@ -33,6 +33,7 @@ show_help() {
     echo "  all-logs   Show logs for all services"
     echo "  build      Build the Rust plugin"
     echo "  status     Show service status"
+    echo "  init-db    Initialize or reinitialize database tables"
     echo "  help       Show this help"
     echo ""
 }
@@ -93,6 +94,38 @@ start_all() {
     
     print_info "Waiting for services to be ready..."
     sleep 15
+    
+    # Wait for database to be fully ready
+    print_info "Waiting for database to be ready..."
+    for i in {1..30}; do
+        if docker exec twine-timescaledb pg_isready -U geyser_writer -d twine_solana_db &>/dev/null; then
+            print_info "Database is ready!"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            print_error "Database failed to start properly"
+            exit 1
+        fi
+        sleep 1
+    done
+    
+    # Verify database tables were created
+    print_info "Verifying database tables..."
+    TABLES=$(docker exec twine-timescaledb psql -U geyser_writer -d twine_solana_db -t -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE';")
+    TABLES=$(echo $TABLES | tr -d ' ')
+    
+    if [ "$TABLES" -lt "5" ]; then
+        print_warn "Database tables not found. Running initialization script..."
+        docker exec -i twine-timescaledb psql -U geyser_writer -d twine_solana_db < schema/init.sql
+        if [ $? -eq 0 ]; then
+            print_info "Database initialized successfully!"
+        else
+            print_error "Failed to initialize database"
+            exit 1
+        fi
+    else
+        print_info "Database tables already exist (found $TABLES tables)"
+    fi
     
     # Check if services are healthy
     print_info "Checking service health..."
@@ -190,6 +223,43 @@ show_status() {
     fi
 }
 
+# Initialize database
+init_database() {
+    print_info "Checking if database container is running..."
+    
+    if ! docker ps | grep -q twine-timescaledb; then
+        print_error "Database container is not running. Please run './setup.sh start' first."
+        exit 1
+    fi
+    
+    print_info "Waiting for database to be ready..."
+    for i in {1..30}; do
+        if docker exec twine-timescaledb pg_isready -U geyser_writer -d twine_solana_db &>/dev/null; then
+            print_info "Database is ready!"
+            break
+        fi
+        if [ $i -eq 30 ]; then
+            print_error "Database is not responding"
+            exit 1
+        fi
+        sleep 1
+    done
+    
+    print_info "Running database initialization script..."
+    docker exec -i twine-timescaledb psql -U geyser_writer -d twine_solana_db < schema/init.sql
+    
+    if [ $? -eq 0 ]; then
+        print_info "Database initialized successfully!"
+        
+        # List created tables
+        print_info "Created tables:"
+        docker exec twine-timescaledb psql -U geyser_writer -d twine_solana_db -c "\dt"
+    else
+        print_error "Failed to initialize database"
+        exit 1
+    fi
+}
+
 # Main script
 check_requirements
 
@@ -218,6 +288,9 @@ case "$1" in
         ;;
     status)
         show_status
+        ;;
+    init-db)
+        init_database
         ;;
     help|--help|-h|"")
         show_help

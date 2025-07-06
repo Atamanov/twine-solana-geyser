@@ -2,26 +2,35 @@
 -- This is usually handled by Docker, but included for completeness
 -- CREATE DATABASE twine_solana_db;
 
--- Create a dedicated user for the Geyser plugin
+-- Note: When using geyser_writer as the main database user (POSTGRES_USER),
+-- these user creation and grant statements are not needed.
+-- They are kept here for reference if using a different setup.
+
+-- Skip user creation if we're already running as geyser_writer
 DO
 $do$
 BEGIN
-   IF NOT EXISTS (
-      SELECT FROM pg_catalog.pg_roles
-      WHERE  rolname = 'geyser_writer') THEN
+   -- Only try to create geyser_writer if we're running as a superuser
+   IF current_user != 'geyser_writer' AND EXISTS (
+      SELECT 1 FROM pg_roles WHERE rolname = current_user AND rolsuper = true
+   ) THEN
+      IF NOT EXISTS (
+         SELECT FROM pg_catalog.pg_roles
+         WHERE  rolname = 'geyser_writer') THEN
 
-      CREATE ROLE geyser_writer LOGIN PASSWORD 'geyser_writer_password';
+         CREATE ROLE geyser_writer LOGIN PASSWORD 'geyser_writer_password';
+      END IF;
+      
+      -- Grant privileges to the new user
+      GRANT CONNECT ON DATABASE twine_solana_db TO geyser_writer;
+      GRANT USAGE ON SCHEMA public TO geyser_writer;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO geyser_writer;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO geyser_writer;
+      GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO geyser_writer;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO geyser_writer;
    END IF;
 END
 $do$;
-
--- Grant privileges to the new user
-GRANT CONNECT ON DATABASE twine_solana_db TO geyser_writer;
-GRANT USAGE ON SCHEMA public TO geyser_writer;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO geyser_writer;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO geyser_writer;
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO geyser_writer;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO geyser_writer;
 
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS timescaledb;

@@ -1,6 +1,6 @@
 [package]
 name = "twine-solana-geyser"
-version = "0.1.0"
+version = "2.0.0"
 edition = "2021"
 authors = ["Twine"]
 description = "A high-performance Geyser plugin with synchronized airlock pattern"
@@ -36,8 +36,8 @@ base58 = "0.2"
 bs58 = "0.5"
 chrono = "0.4"
 config = "0.15"
-log4rs = "1.2.0"
-sysinfo = "0.30.12"
+log4rs = "1.3"
+sysinfo = "0.35"
 
 [dev-dependencies]
 env_logger = "0.11"
@@ -49,6 +49,6 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [patch.crates-io]
-agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
+agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface" }
 solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
 solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
