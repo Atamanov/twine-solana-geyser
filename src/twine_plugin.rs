@@ -18,6 +18,7 @@ use tokio::runtime::Runtime;
 use crate::chain_monitor::ChainMonitor;
 use crate::metrics_server::MetricsServer;
 use crate::worker_pool::WorkerPool;
+use crate::api_server::ApiServerHandle;
 
 /// Container for slot data waiting to be persisted
 #[derive(Debug)]
@@ -62,7 +63,7 @@ pub struct TwineGeyserPlugin {
     /// Metrics server handle
     metrics_server: Option<tokio::task::JoinHandle<()>>,
     /// API server handle
-    api_server: Option<tokio::task::JoinHandle<()>>,
+    api_server: Option<ApiServerHandle>,
     /// Chain monitor
     chain_monitor: Option<Arc<ChainMonitor>>,
 }
@@ -236,7 +237,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         // Stop API server
         if let Some(handle) = self.api_server.take() {
-            handle.abort();
+            handle.shutdown();
         }
 
         // Wait for workers to finish
@@ -246,7 +247,8 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Shutdown runtime
         if let Some(runtime) = self.runtime.take() {
-            runtime.shutdown_background();
+            // Give tasks a moment to complete
+            runtime.shutdown_timeout(std::time::Duration::from_secs(5));
         }
     }
 
@@ -922,18 +924,8 @@ impl TwineGeyserPlugin {
         );
 
         // API server starts in its own thread
-        crate::api_server::start_api_server(monitored_accounts, api_port, db_config);
-        
-        // Since it runs in a separate thread, we don't need to track the handle
-        // in the same way. Set a dummy handle to indicate it's running.
-        if let Some(runtime) = self.runtime.as_ref() {
-            self.api_server = Some(runtime.spawn(async {
-                // Dummy task to indicate API server is running
-                loop {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
-                }
-            }));
-        }
+        let handle = crate::api_server::start_api_server(monitored_accounts, api_port, db_config);
+        self.api_server = Some(handle);
     }
     
     fn sync_monitored_accounts_from_db(&self, config: &PluginConfig) {

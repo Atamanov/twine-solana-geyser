@@ -6,6 +6,7 @@ use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use std::sync::mpsc;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MonitoredAccount {
@@ -41,11 +42,17 @@ pub struct ApiState {
     pub db_config: String,
 }
 
+#[derive(Debug)]
+pub struct ApiServerHandle {
+    shutdown_tx: mpsc::Sender<()>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
+}
+
 pub fn start_api_server(
     monitored_accounts: Arc<DashSet<Pubkey>>,
     api_port: u16,
     db_config: String,
-) {
+) -> ApiServerHandle {
     let account_metadata = Arc::new(RwLock::new(std::collections::HashMap::new()));
     
     let state = web::Data::new(ApiState {
@@ -56,24 +63,69 @@ pub fn start_api_server(
 
     info!("Starting API server on port {}", api_port);
 
+    let (shutdown_tx, shutdown_rx) = mpsc::channel();
+    
     // Run actix-web in a separate thread with its own runtime
-    std::thread::spawn(move || {
-        let sys = actix_web::rt::System::new();
+    let thread_handle = std::thread::spawn(move || {
+        // Create a new tokio runtime for the API server
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime");
         
-        let server = HttpServer::new(move || {
-            App::new()
-                .app_data(state.clone())
-                .route("/api/monitored-accounts", web::get().to(get_monitored_accounts))
-                .route("/api/monitored-accounts", web::post().to(add_monitored_account))
-                .route("/api/monitored-accounts", web::delete().to(remove_monitored_account))
-                .route("/api/health", web::get().to(health_check))
-        })
-        .bind(("0.0.0.0", api_port))
-        .expect("Failed to bind API server")
-        .run();
+        rt.block_on(async {
+            let server = HttpServer::new(move || {
+                App::new()
+                    .app_data(state.clone())
+                    .route("/api/monitored-accounts", web::get().to(get_monitored_accounts))
+                    .route("/api/monitored-accounts", web::post().to(add_monitored_account))
+                    .route("/api/monitored-accounts", web::delete().to(remove_monitored_account))
+                    .route("/api/health", web::get().to(health_check))
+            })
+            .bind(("0.0.0.0", api_port))
+            .expect("Failed to bind API server")
+            .disable_signals()
+            .run();
+            
+            let server_handle = server.handle();
+            
+            // Spawn a task to listen for shutdown signal
+            let shutdown_handle = server_handle.clone();
+            tokio::spawn(async move {
+                // Wait for shutdown signal in a blocking manner
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                std::thread::spawn(move || {
+                    let _ = shutdown_rx.recv();
+                    let _ = tx.send(());
+                });
+                let _ = rx.await;
+                info!("API server received shutdown signal");
+                shutdown_handle.stop(true).await;
+            });
+            
+            if let Err(e) = server.await {
+                error!("API server error: {}", e);
+            }
+        });
         
-        sys.block_on(server).expect("API server failed");
+        info!("API server thread exiting");
     });
+    
+    ApiServerHandle {
+        shutdown_tx,
+        thread_handle: Some(thread_handle),
+    }
+}
+
+impl ApiServerHandle {
+    pub fn shutdown(mut self) {
+        info!("Shutting down API server");
+        let _ = self.shutdown_tx.send(());
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+        info!("API server shutdown complete");
+    }
 }
 
 async fn health_check() -> Result<HttpResponse> {
