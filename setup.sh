@@ -271,7 +271,7 @@ init_grafana() {
     fi
     
     print_info "Restarting Grafana to reload dashboard configuration..."
-    docker compose -f docker-compose.monitoring.yml restart grafana
+    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml restart grafana
     
     if [ $? -eq 0 ]; then
         print_info "Grafana restarted successfully!"
