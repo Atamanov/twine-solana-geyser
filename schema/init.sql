@@ -224,3 +224,42 @@ CREATE TABLE IF NOT EXISTS geyser_stats (
 
 -- Index for stats queries
 CREATE INDEX IF NOT EXISTS idx_geyser_stats_recorded_at ON geyser_stats (recorded_at DESC);
+
+-- Create table for monitored accounts configuration
+CREATE TABLE IF NOT EXISTS monitored_accounts (
+    account_pubkey VARCHAR(88) PRIMARY KEY,
+    added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_slot BIGINT,
+    last_seen_at TIMESTAMPTZ,
+    total_changes_tracked BIGINT DEFAULT 0,
+    total_data_bytes BIGINT DEFAULT 0,
+    active BOOLEAN DEFAULT true,
+    metadata JSONB
+);
+
+CREATE INDEX idx_monitored_accounts_active ON monitored_accounts(active);
+CREATE INDEX idx_monitored_accounts_last_seen ON monitored_accounts(last_seen_at);
+
+-- Create table for account change statistics
+CREATE TABLE IF NOT EXISTS account_change_stats (
+    account_pubkey VARCHAR(88) NOT NULL,
+    slot BIGINT NOT NULL,
+    change_count INTEGER NOT NULL DEFAULT 1,
+    old_data_size BIGINT NOT NULL,
+    new_data_size BIGINT NOT NULL,
+    total_data_size BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (account_pubkey, slot)
+);
+
+CREATE INDEX idx_account_change_stats_slot ON account_change_stats(slot);
+CREATE INDEX idx_account_change_stats_pubkey ON account_change_stats(account_pubkey);
+CREATE INDEX idx_account_change_stats_created ON account_change_stats(created_at DESC);
+
+-- Convert to hypertable for time-series efficiency
+SELECT create_hypertable('account_change_stats', 'created_at', 
+    chunk_time_interval => INTERVAL '1 day',
+    if_not_exists => TRUE);
+
+-- Set up retention policy for 7 days on account change stats
+SELECT add_retention_policy('account_change_stats', INTERVAL '7 days');

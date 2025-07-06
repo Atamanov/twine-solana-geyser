@@ -334,9 +334,14 @@ async fn process_account_changes_batch(
     for cmd in changes {
         if let DbWriteCommand::AccountChanges { slot, changes } = cmd {
             for change in changes {
+                let old_data_size = change.old_account.data().len() as i64;
+                let new_data_size = change.new_account.data().len() as i64;
+                let total_data_size = old_data_size + new_data_size;
+                
+                // Insert account change
                 let query = r#"
                     INSERT INTO account_changes (
-                        &(*slot as i64), account_pubkey, write_version,
+                        slot, account_pubkey, write_version,
                         old_lamports, old_owner, old_executable, old_rent_epoch, old_data, old_lthash,
                         new_lamports, new_owner, new_executable, new_rent_epoch, new_data, new_lthash
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
@@ -371,6 +376,53 @@ async fn process_account_changes_batch(
                                 .iter()
                                 .flat_map(|&x| x.to_le_bytes())
                                 .collect::<Vec<u8>>(),
+                        ],
+                    )
+                    .await?;
+
+                // Update account change statistics
+                let stats_query = r#"
+                    INSERT INTO account_change_stats (
+                        account_pubkey, slot, change_count, old_data_size, new_data_size, total_data_size
+                    ) VALUES ($1, $2, 1, $3, $4, $5)
+                    ON CONFLICT (account_pubkey, slot) DO UPDATE SET
+                        change_count = account_change_stats.change_count + 1,
+                        old_data_size = account_change_stats.old_data_size + EXCLUDED.old_data_size,
+                        new_data_size = account_change_stats.new_data_size + EXCLUDED.new_data_size,
+                        total_data_size = account_change_stats.total_data_size + EXCLUDED.total_data_size
+                "#;
+
+                client
+                    .execute(
+                        stats_query,
+                        &[
+                            &change.pubkey.to_string(),
+                            &(*slot as i64),
+                            &old_data_size,
+                            &new_data_size,
+                            &total_data_size,
+                        ],
+                    )
+                    .await?;
+
+                // Update monitored accounts table
+                let update_query = r#"
+                    UPDATE monitored_accounts 
+                    SET 
+                        last_seen_slot = $2,
+                        last_seen_at = NOW(),
+                        total_changes_tracked = total_changes_tracked + 1,
+                        total_data_bytes = total_data_bytes + $3
+                    WHERE account_pubkey = $1
+                "#;
+
+                client
+                    .execute(
+                        update_query,
+                        &[
+                            &change.pubkey.to_string(),
+                            &(*slot as i64),
+                            &total_data_size,
                         ],
                     )
                     .await?;

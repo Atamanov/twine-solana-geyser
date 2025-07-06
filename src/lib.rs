@@ -1,4 +1,5 @@
 pub mod airlock;
+pub mod api_server;
 pub mod chain_monitor;
 pub mod logging;
 pub mod metrics_server;

@@ -152,6 +152,9 @@ pub struct PluginConfig {
     pub max_queue_size: usize,
     pub batch_size: usize,
     pub batch_timeout_ms: u64,
+    
+    // API server configuration
+    pub api_port: Option<u16>,
 
     // Proof scheduling
     pub proof_scheduling_slot_interval: u64,

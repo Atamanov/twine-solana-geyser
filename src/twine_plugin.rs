@@ -61,6 +61,8 @@ pub struct TwineGeyserPlugin {
     last_stats_log_slot: AtomicU64,
     /// Metrics server handle
     metrics_server: Option<tokio::task::JoinHandle<()>>,
+    /// API server handle
+    api_server: Option<tokio::task::JoinHandle<()>>,
     /// Chain monitor
     chain_monitor: Option<Arc<ChainMonitor>>,
 }
@@ -81,6 +83,7 @@ impl Default for TwineGeyserPlugin {
             stats: Arc::new(AirlockStats::default()),
             last_stats_log_slot: AtomicU64::new(0),
             metrics_server: None,
+            api_server: None,
             chain_monitor: None,
         }
     }
@@ -123,15 +126,18 @@ impl GeyserPlugin for TwineGeyserPlugin {
             info!("Logging reconfigured based on plugin config");
         }
 
-        // Initialize monitored accounts
+        // Initialize monitored accounts from config
         for account_str in &config.monitored_accounts {
             if let Ok(pubkey) = Pubkey::from_str(account_str) {
                 self.monitored_accounts.insert(pubkey);
-                info!("Added monitored account: {}", account_str);
+                info!("Added monitored account from config: {}", account_str);
             } else {
                 warn!("Invalid pubkey in monitored_accounts: {}", account_str);
             }
         }
+
+        // Sync monitored accounts from database
+        self.sync_monitored_accounts_from_db(&config);
 
         info!(
             "Plugin configured with {} monitored accounts",
@@ -199,6 +205,12 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Start metrics server
         info!("Starting metrics server");
         self.start_metrics_server();
+        
+        // Start API server if configured
+        if self.config.as_ref().and_then(|c| c.api_port).is_some() {
+            info!("Starting API server");
+            self.start_api_server();
+        }
 
         info!("Twine Geyser Plugin on_load completed successfully");
         Ok(())
@@ -219,6 +231,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Stop metrics server
         if let Some(handle) = self.metrics_server.take() {
+            handle.abort();
+        }
+        
+        // Stop API server
+        if let Some(handle) = self.api_server.take() {
             handle.abort();
         }
 
@@ -879,5 +896,95 @@ impl TwineGeyserPlugin {
         });
 
         self.metrics_server = Some(handle);
+    }
+    
+    fn start_api_server(&mut self) {
+        let monitored_accounts = self.monitored_accounts.clone();
+        let api_port = match self.config.as_ref().and_then(|c| c.api_port) {
+            Some(port) => port,
+            None => {
+                error!("Cannot start API server: api_port not configured");
+                return;
+            }
+        };
+
+        let runtime = match self.runtime.as_ref() {
+            Some(rt) => rt,
+            None => {
+                error!("Cannot start API server: runtime not initialized");
+                return;
+            }
+        };
+
+        let handle = runtime.spawn(async move {
+            if let Err(e) = crate::api_server::start_api_server(monitored_accounts, api_port).await {
+                error!("API server error: {}", e);
+            }
+        });
+
+        self.api_server = Some(handle);
+    }
+    
+    fn sync_monitored_accounts_from_db(&self, config: &PluginConfig) {
+        use tokio_postgres::{NoTls, Client};
+        
+        let db_config = format!(
+            "host={} port={} user={} password={} dbname={}",
+            config.db_host, config.db_port, config.db_user, config.db_password, config.db_name
+        );
+        
+        // Use blocking connection for initial sync
+        if let Ok((mut client, connection)) = tokio_postgres::connect(&db_config, NoTls).map_err(|e| {
+            warn!("Failed to connect to database for syncing monitored accounts: {}", e);
+            e
+        }).ok().and_then(|result| {
+            // Spawn connection handler in background
+            std::thread::spawn(move || {
+                let runtime = Runtime::new().unwrap();
+                runtime.block_on(async {
+                    if let Err(e) = connection.await {
+                        error!("Database connection error during sync: {}", e);
+                    }
+                });
+            });
+            Some(result)
+        }) {
+            // Run the query synchronously
+            let runtime = Runtime::new().unwrap();
+            let result = runtime.block_on(async {
+                // First, insert accounts from config that don't exist
+                for account_str in &config.monitored_accounts {
+                    let _ = client.execute(
+                        "INSERT INTO monitored_accounts (account_pubkey) VALUES ($1) ON CONFLICT DO NOTHING",
+                        &[&account_str],
+                    ).await;
+                }
+                
+                // Then fetch all active accounts
+                client.query(
+                    "SELECT account_pubkey FROM monitored_accounts WHERE active = true",
+                    &[],
+                ).await
+            });
+            
+            match result {
+                Ok(rows) => {
+                    let mut count = 0;
+                    for row in rows {
+                        let account_str: String = row.get(0);
+                        if let Ok(pubkey) = Pubkey::from_str(&account_str) {
+                            if self.monitored_accounts.insert(pubkey) {
+                                count += 1;
+                                info!("Added monitored account from DB: {}", account_str);
+                            }
+                        }
+                    }
+                    info!("Synced {} additional monitored accounts from database", count);
+                }
+                Err(e) => {
+                    warn!("Failed to query monitored accounts from database: {}", e);
+                }
+            }
+        }
     }
 }
