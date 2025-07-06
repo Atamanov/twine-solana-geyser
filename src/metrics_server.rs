@@ -242,7 +242,9 @@ struct MemoryUsage {
 
 fn get_memory_usage(state: &MetricsState) -> MemoryUsage {
     let mut sys = state.system.lock();
-    sys.refresh_processes();
+    // In sysinfo 0.35, refresh_processes takes ProcessesToUpdate and a bool
+    use sysinfo::ProcessesToUpdate;
+    sys.refresh_processes(ProcessesToUpdate::All, true);
 
     if let Some(process) = sys.process(Pid::from(std::process::id() as usize)) {
         MemoryUsage {
