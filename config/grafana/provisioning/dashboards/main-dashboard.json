@@ -301,7 +301,7 @@
           },
           "editorMode": "code",
           "expr": "twine_geyser_validator_slot",
-          "hide": true,
+          "hide": false,
           "legendFormat": "validator_slot",
           "range": true,
           "refId": "A"
@@ -312,10 +312,10 @@
             "uid": "$timescale"
           },
           "editorMode": "code",
-          "format": "time_series",
-          "hide": true,
+          "format": "table",
+          "hide": false,
           "rawQuery": true,
-          "rawSql": "SELECT \n  NOW() as time,\n  MAX(slot) as db_slot \nFROM slots \nWHERE status = 'rooted'",
+          "rawSql": "SELECT MAX(slot) as value FROM slots WHERE status = 'rooted'",
           "refId": "B",
           "sql": {
             "columns": [
@@ -338,13 +338,14 @@
         {
           "datasource": {
             "type": "datasource",
-            "uid": "__expr__"
+            "uid": "-- Mixed --"
           },
           "expression": "$A - $B",
           "hide": false,
           "refId": "C",
           "reducer": "last",
-          "mathExpression": true
+          "mathExpression": true,
+          "type": "math"
         }
       ],
       "title": "DB Behind Validator",
@@ -427,7 +428,7 @@
             "uid": "$prometheus"
           },
           "editorMode": "code",
-          "expr": "twine_geyser_pending_slot_data_count",
+          "expr": "twine_geyser_airlock_pending_slots",
           "legendFormat": "Pending",
           "range": true,
           "refId": "A"
@@ -848,7 +849,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COUNT(*) as total_gaps\nFROM slots \nWHERE status = 'rooted' \nAND (\n  bank_hash = '' \n  OR bank_hash LIKE 'MISSING_%' \n  OR bank_hash LIKE 'PLACEHOLDER_%'\n  OR cumulative_lthash = '\\x00'\n  OR length(cumulative_lthash) = 0\n)",
+          "rawSql": "WITH ordered_slots AS (\n  SELECT slot,\n    CASE WHEN (\n      bank_hash = '' \n      OR bank_hash LIKE 'MISSING_%' \n      OR bank_hash LIKE 'PLACEHOLDER_%'\n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    ) THEN 1 ELSE 0 END as is_missing,\n    LAG(CASE WHEN (\n      bank_hash = '' \n      OR bank_hash LIKE 'MISSING_%' \n      OR bank_hash LIKE 'PLACEHOLDER_%'\n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    ) THEN 1 ELSE 0 END, 1, 0) OVER (ORDER BY slot) as prev_is_missing\n  FROM slots\n  WHERE status = 'rooted'\n)\nSELECT COUNT(*) as total_gaps\nFROM ordered_slots\nWHERE is_missing = 1 AND prev_is_missing = 0",
           "refId": "A",
           "sql": {
             "columns": [
@@ -971,7 +972,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH gap_slots AS (\n  SELECT slot,\n    LAG(slot) OVER (ORDER BY slot) as prev_slot,\n    slot - LAG(slot) OVER (ORDER BY slot) as gap_size\n  FROM slots\n  WHERE status = 'rooted' \n  AND NOT (\n    bank_hash = '' \n    OR bank_hash LIKE 'MISSING_%' \n    OR bank_hash LIKE 'PLACEHOLDER_%'\n    OR cumulative_lthash = '\\x00'\n    OR length(cumulative_lthash) = 0\n  )\n  ORDER BY slot DESC\n  LIMIT 1000\n),\ngaps AS (\n  SELECT \n    prev_slot + 1 as gap_start,\n    slot - 1 as gap_end,\n    gap_size - 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM gap_slots\n  WHERE gap_size > 1\n  ORDER BY gap_end DESC\n  LIMIT 25\n)\nSELECT * FROM gaps",
+          "rawSql": "WITH slot_status AS (\n  SELECT slot,\n    CASE WHEN (\n      bank_hash = '' \n      OR bank_hash LIKE 'MISSING_%' \n      OR bank_hash LIKE 'PLACEHOLDER_%'\n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    ) THEN 1 ELSE 0 END as is_missing\n  FROM slots\n  WHERE status = 'rooted'\n),\ngap_groups AS (\n  SELECT slot, is_missing,\n    SUM(CASE WHEN is_missing != LAG(is_missing, 1, 0) OVER (ORDER BY slot) THEN 1 ELSE 0 END) \n      OVER (ORDER BY slot) as gap_group\n  FROM slot_status\n),\ngaps AS (\n  SELECT \n    MIN(slot) as gap_start,\n    MAX(slot) as gap_end,\n    MAX(slot) - MIN(slot) + 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM gap_groups\n  WHERE is_missing = 1\n  GROUP BY gap_group\n  HAVING MAX(slot) - MIN(slot) >= 0\n  ORDER BY MAX(slot) DESC\n  LIMIT 25\n)\nSELECT * FROM gaps",
           "refId": "A",
           "sql": {
             "columns": [
