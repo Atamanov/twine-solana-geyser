@@ -2028,7 +2028,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT \n  slot,\n  voter_pubkey,\n  vote_signature,\n  created_at,\n  validator_stake,\n  stake_percentage,\n  validator_status\nFROM recent_votes_with_stakes\nLIMIT 100",
+          "rawSql": "SELECT \n  slot,\n  voter_pubkey,\n  vote_signature,\n  created_at,\n  validator_stake,\n  stake_percentage,\n  validator_status\nFROM recent_votes_simple\nLIMIT 100",
           "refId": "A",
           "sql": {
             "columns": [

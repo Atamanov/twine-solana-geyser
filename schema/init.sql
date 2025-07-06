@@ -361,25 +361,13 @@ CREATE INDEX idx_epoch_validator_sets_validator ON epoch_validator_sets(validato
 CREATE INDEX idx_epoch_validator_sets_stake ON epoch_validator_sets(total_stake DESC);
 
 -- Create view for recent votes with stake information
+-- Using a simpler approach to avoid window function issues
 CREATE OR REPLACE VIEW recent_votes_with_stakes AS
-WITH latest_epoch AS (
-    SELECT MAX(epoch) as current_epoch FROM epoch_validator_sets
-),
-latest_votes AS (
-    SELECT DISTINCT ON (voter_pubkey)
-        slot,
-        voter_pubkey,
-        vote_signature,
-        created_at
-    FROM vote_transactions
-    WHERE created_at > NOW() - INTERVAL '1 hour'
-    ORDER BY voter_pubkey, slot DESC
-)
 SELECT 
-    lv.slot,
-    lv.voter_pubkey,
-    lv.vote_signature,
-    lv.created_at,
+    vt.slot,
+    vt.voter_pubkey,
+    vt.vote_signature,
+    vt.created_at,
     COALESCE(evs.total_stake, 0) as validator_stake,
     COALESCE(evs.stake_percentage, 0) as stake_percentage,
     evs.epoch,
@@ -387,11 +375,16 @@ SELECT
         WHEN evs.validator_pubkey IS NOT NULL THEN 'active'
         ELSE 'inactive'
     END as validator_status
-FROM latest_votes lv
-CROSS JOIN latest_epoch le
-LEFT JOIN epoch_validator_sets evs ON lv.voter_pubkey = evs.validator_pubkey 
-    AND evs.epoch = le.current_epoch
-ORDER BY lv.slot DESC;
+FROM vote_transactions vt
+LEFT JOIN LATERAL (
+    SELECT * FROM epoch_validator_sets evs
+    WHERE evs.validator_pubkey = vt.voter_pubkey
+    AND evs.epoch = (SELECT MAX(epoch) FROM epoch_validator_sets)
+    LIMIT 1
+) evs ON true
+WHERE vt.created_at > NOW() - INTERVAL '1 hour'
+ORDER BY vt.slot DESC
+LIMIT 100;
 
 -- Create materialized view for vote participation stats
 CREATE MATERIALIZED VIEW IF NOT EXISTS vote_participation_stats AS
