@@ -8,13 +8,10 @@ description = "A high-performance Geyser plugin with synchronized airlock patter
 [dependencies]
 # Solana dependencies from agave workspace
 solana-sdk = { version = "2.2.2" }
+solana-transaction = { version = "2.2.2" }
 agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
 solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
 solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
-solana-transaction = { version = "=2.2.18", path = "../agave/transaction" }
-solana-signature = { version = "=2.2.18", path = "../agave/signature" }
-solana-pubkey = { version = "=2.2.18", path = "../agave/pubkey" }
-solana-clock = { version = "=2.2.18", path = "../agave/clock" }
 
 # Database and async runtime
 tokio = { version = "1", features = ["full"] }
@@ -57,7 +54,3 @@ default = []
 agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
 solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
 solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
-solana-transaction = { version = "=2.2.18", path = "../agave/transaction" }
-solana-signature = { version = "=2.2.18", path = "../agave/signature" }
-solana-pubkey = { version = "=2.2.18", path = "../agave/pubkey" }
-solana-clock = { version = "=2.2.18", path = "../agave/clock" }

@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
-use log::*;
 
 // The Stake program ID
 pub const STAKE_PROGRAM_ID: &str = "Stake11111111111111111111111111111111111111";

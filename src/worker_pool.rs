@@ -1,5 +1,4 @@
-use crate::airlock::types::{DbWriteCommand, PluginConfig, VoteTransaction, ValidatorStake,
-    StakeAccountInfo, EpochValidator};
+use crate::airlock::types::{DbWriteCommand, PluginConfig};
 use crate::airlock::AirlockStats;
 use chrono;
 use crossbeam_channel::Receiver;
@@ -389,7 +388,7 @@ async fn process_slot_batch(
                         &entry_count.map(|c| c as i64),
                         &blockhash.as_ref().map(|_| chrono::Utc::now()),
                         &(vote_transactions.len() as i32),
-                        &vote_info,
+                        &vote_info.as_ref().map(|v| v.to_string()),
                     ],
                 )
                 .await?;
@@ -411,7 +410,7 @@ async fn process_slot_batch(
                             &vote_tx.voter_pubkey,
                             &vote_tx.vote_signature,
                             &vote_tx.vote_transaction,
-                            &vote_tx.transaction_meta,
+                            &vote_tx.transaction_meta.as_ref().map(|v| v.to_string()),
                         ],
                     )
                     .await?;
@@ -453,19 +452,19 @@ async fn process_account_changes_batch(
                         &[
                             &(*slot as i64),
                             &change.pubkey.to_string(),
-                            &(change.write_version as i64),
+                            &0i64,  // write_version not available in OwnedAccountChange, using 0
                             &(change.old_account.lamports() as i64),
                             &change.old_account.owner().to_string(),
                             &change.old_account.executable(),
                             &(change.old_account.rent_epoch() as i64),
                             &change.old_account.data(),
-                            &change.old_lthash.0.as_slice(),
+                            &change.old_lthash.0.iter().flat_map(|&x| x.to_le_bytes()).collect::<Vec<u8>>(),
                             &(change.new_account.lamports() as i64),
                             &change.new_account.owner().to_string(),
                             &change.new_account.executable(),
                             &(change.new_account.rent_epoch() as i64),
                             &change.new_account.data(),
-                            &change.new_lthash.0.as_slice(),
+                            &change.new_lthash.0.iter().flat_map(|&x| x.to_le_bytes()).collect::<Vec<u8>>(),
                         ],
                     )
                     .await?;

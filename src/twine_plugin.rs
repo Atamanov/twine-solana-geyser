@@ -14,6 +14,7 @@ use dashmap::{DashMap, DashSet};
 use log::*;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Signature;
+use solana_sdk::account::ReadableAccount;
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_status::TransactionStatusMeta;
 use std::str::FromStr;
@@ -310,7 +311,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
                         let _ = queue.send(DbWriteCommand::StakeAccountChange {
                             slot,
                             stake_info: db_stake_info,
-                            lthash: account_change.new_lthash.0.to_vec(),
+                            lthash: account_change.new_lthash.0.iter().map(|&x| x as u8).collect(),
                         });
                     }
                 }
@@ -587,8 +588,10 @@ impl TwineGeyserPlugin {
             None => return Ok(()),
         };
 
-        // Serialize the transaction
-        let serialized_tx = match bincode::serialize(transaction) {
+        // Get the versioned transaction to serialize
+        // We need the full transaction data to verify the signature later
+        let versioned_tx = transaction.to_versioned_transaction();
+        let serialized_tx = match bincode::serialize(&versioned_tx) {
             Ok(data) => data,
             Err(e) => {
                 warn!("Failed to serialize vote transaction: {}", e);
