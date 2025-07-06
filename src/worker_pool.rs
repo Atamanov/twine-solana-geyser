@@ -388,7 +388,7 @@ async fn process_slot_batch(
                         &entry_count.map(|c| c as i64),
                         &blockhash.as_ref().map(|_| chrono::Utc::now()),
                         &(vote_transactions.len() as i32),
-                        &vote_info.as_ref().map(|v| v.to_string()),
+                        &vote_info,
                     ],
                 )
                 .await?;

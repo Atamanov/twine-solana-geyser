@@ -301,9 +301,10 @@
           },
           "editorMode": "code",
           "expr": "twine_geyser_validator_slot",
-          "hide": false,
+          "hide": true,
+          "instant": true,
           "legendFormat": "validator_slot",
-          "range": true,
+          "range": false,
           "refId": "A"
         },
         {
@@ -313,7 +314,7 @@
           },
           "editorMode": "code",
           "format": "table",
-          "hide": false,
+          "hide": true,
           "rawQuery": true,
           "rawSql": "SELECT MAX(slot) as value FROM slots WHERE status = 'rooted'",
           "refId": "B",
@@ -337,14 +338,13 @@
         },
         {
           "datasource": {
-            "type": "datasource",
-            "uid": "-- Mixed --"
+            "name": "Expression",
+            "type": "__expr__",
+            "uid": "__expr__"
           },
           "expression": "$A - $B",
           "hide": false,
           "refId": "C",
-          "reducer": "last",
-          "mathExpression": true,
           "type": "math"
         }
       ],
@@ -972,7 +972,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH slot_status AS (\n  SELECT slot,\n    CASE WHEN (\n      bank_hash = '' \n      OR bank_hash LIKE 'MISSING_%' \n      OR bank_hash LIKE 'PLACEHOLDER_%'\n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    ) THEN 1 ELSE 0 END as is_missing\n  FROM slots\n  WHERE status = 'rooted'\n),\ngap_groups AS (\n  SELECT slot, is_missing,\n    SUM(CASE WHEN is_missing != LAG(is_missing, 1, 0) OVER (ORDER BY slot) THEN 1 ELSE 0 END) \n      OVER (ORDER BY slot) as gap_group\n  FROM slot_status\n),\ngaps AS (\n  SELECT \n    MIN(slot) as gap_start,\n    MAX(slot) as gap_end,\n    MAX(slot) - MIN(slot) + 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM gap_groups\n  WHERE is_missing = 1\n  GROUP BY gap_group\n  HAVING MAX(slot) - MIN(slot) >= 0\n  ORDER BY MAX(slot) DESC\n  LIMIT 25\n)\nSELECT * FROM gaps",
+          "rawSql": "WITH missing_slots AS (\n  SELECT slot\n  FROM slots\n  WHERE status = 'rooted'\n    AND (\n      bank_hash = '' \n      OR bank_hash LIKE 'MISSING_%' \n      OR bank_hash LIKE 'PLACEHOLDER_%'\n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    )\n  ORDER BY slot\n),\nslot_ranges AS (\n  SELECT \n    slot,\n    slot - ROW_NUMBER() OVER (ORDER BY slot) as grp\n  FROM missing_slots\n),\ngaps AS (\n  SELECT \n    MIN(slot) as gap_start,\n    MAX(slot) as gap_end,\n    MAX(slot) - MIN(slot) + 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM slot_ranges\n  GROUP BY grp\n  ORDER BY MIN(slot) DESC\n  LIMIT 25\n)\nSELECT * FROM gaps",
           "refId": "A",
           "sql": {
             "columns": [
