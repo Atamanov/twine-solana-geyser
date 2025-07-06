@@ -1,33 +1,58 @@
-version: '3.3'
-
 services:
   timescaledb:
     image: timescale/timescaledb:latest-pg16
     container_name: twine-timescaledb
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-twine_solana_db}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_password}
-      # Additional users will be created by init.sql
-      GEYSER_USER: ${GEYSER_USER:-geyser_writer}
-      GEYSER_PASSWORD: ${GEYSER_PASSWORD:-geyser_writer_password}
-      # TimescaleDB specific settings
+      POSTGRES_DB: twine_solana_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_password
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C"
       TIMESCALEDB_TELEMETRY: "off"
-    ports:
-      - "127.0.0.1:5432:5432"  # Bind to localhost only
     volumes:
-      # Database data
       - timescale_data:/var/lib/postgresql/data
-      # Init scripts
-      - ./schema/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
-      # Custom PostgreSQL configuration
-      - ./config/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./schema/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - twine-network
+    shm_size: 1gb
     command: >
       postgres
       -c shared_preload_libraries=timescaledb,pg_stat_statements
-      -c config_file=/etc/postgresql/postgresql.conf
-    shm_size: 1gb
+      -c shared_buffers=4GB
+      -c effective_cache_size=12GB
+      -c work_mem=256MB
+      -c maintenance_work_mem=1GB
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c wal_buffers=16MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c max_worker_processes=16
+      -c max_parallel_workers_per_gather=8
+      -c max_parallel_workers=16
+      -c max_parallel_maintenance_workers=4
+      -c checkpoint_completion_target=0.9
+      -c wal_compression=on
+      -c wal_log_hints=on
+      -c wal_level=replica
+      -c max_wal_senders=0
+      -c synchronous_commit=off
+      -c full_page_writes=on
+      -c checkpoint_timeout=15min
+      -c listen_addresses='*'
+      -c max_connections=200
+      -c superuser_reserved_connections=5
+      -c timescaledb.max_background_workers=8
+      -c log_line_prefix='%t [%p] %u@%d '
+      -c log_checkpoints=on
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_duration=off
+      -c log_lock_waits=on
+      -c log_statement=none
+      -c log_timezone='UTC'
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d twine_solana_db"]
       interval: 10s
@@ -40,6 +65,5 @@ volumes:
     driver: local
 
 networks:
-  default:
-    name: twine-network
-    driver: bridge
+  twine-network:
+    external: true

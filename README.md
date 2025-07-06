@@ -27,7 +27,12 @@ The plugin uses a multi-stage architecture:
 ### 1. Start the Database
 
 ```bash
-./scripts/start-db.sh
+# Start fresh (removes old data)
+./setup.sh clean
+./setup.sh up
+
+# Check status
+./setup.sh status
 ```
 
 This starts a high-performance TimescaleDB instance with:

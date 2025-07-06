@@ -1,5 +1,5 @@
-pub mod types;
 pub mod pool;
+pub mod types;
 
 use crate::airlock::types::{OwnedReplicaAccountInfo, Slot, SlotAirlock};
 use dashmap::DashMap;
@@ -29,6 +29,15 @@ pub struct AirlockStats {
     pub queue_capacity: AtomicUsize,
     pub worker_pool_size: AtomicUsize,
     pub queue_throughput: AtomicUsize,
+    // New DB metrics
+    pub db_batch_success_count: AtomicUsize,
+    pub db_batch_error_count: AtomicUsize,
+    pub last_db_batch_slot: AtomicUsize,
+    pub last_db_batch_timestamp: AtomicUsize,
+    // Geyser plugin internal metrics
+    pub pending_slot_data_count: AtomicUsize,
+    pub slot_status_updates: AtomicUsize,
+    pub block_metadata_received: AtomicUsize,
 }
 
 impl Default for AirlockStats {
@@ -45,6 +54,15 @@ impl Default for AirlockStats {
             queue_capacity: AtomicUsize::new(0),
             worker_pool_size: AtomicUsize::new(0),
             queue_throughput: AtomicUsize::new(0),
+            // New DB metrics
+            db_batch_success_count: AtomicUsize::new(0),
+            db_batch_error_count: AtomicUsize::new(0),
+            last_db_batch_slot: AtomicUsize::new(0),
+            last_db_batch_timestamp: AtomicUsize::new(0),
+            // Geyser plugin internal metrics
+            pending_slot_data_count: AtomicUsize::new(0),
+            slot_status_updates: AtomicUsize::new(0),
+            block_metadata_received: AtomicUsize::new(0),
         }
     }
 }
@@ -149,7 +167,7 @@ impl AirlockManager {
     pub fn clear_old_slots(&self, current_slot: Slot, keep_slots: u64) {
         let min_slot = current_slot.saturating_sub(keep_slots);
         let mut removed = 0;
-        
+
         self.slot_airlocks.retain(|&slot, _| {
             if slot < min_slot {
                 removed += 1;
@@ -161,7 +179,9 @@ impl AirlockManager {
 
         if removed > 0 {
             log::debug!("Cleared {} old slots before slot {}", removed, min_slot);
-            self.stats.active_slots.fetch_sub(removed, Ordering::Relaxed);
+            self.stats
+                .active_slots
+                .fetch_sub(removed, Ordering::Relaxed);
         }
     }
 }
@@ -174,13 +194,22 @@ impl AirlockStats {
             active_slots: self.active_slots.load(Ordering::Relaxed),
             monitored_accounts: 0, // Will be set by caller
             monitored_account_changes: self.monitored_account_changes.load(Ordering::Relaxed),
-            slots_with_monitored_accounts: self.slots_with_monitored_accounts.load(Ordering::Relaxed),
+            slots_with_monitored_accounts: self
+                .slots_with_monitored_accounts
+                .load(Ordering::Relaxed),
             proof_requests_generated: self.proof_requests_generated.load(Ordering::Relaxed),
             db_writes: self.db_writes.load(Ordering::Relaxed),
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
             queue_capacity: self.queue_capacity.load(Ordering::Relaxed),
             worker_pool_size: self.worker_pool_size.load(Ordering::Relaxed),
             queue_throughput: self.queue_throughput.load(Ordering::Relaxed),
+            db_batch_success_count: self.db_batch_success_count.load(Ordering::Relaxed),
+            db_batch_error_count: self.db_batch_error_count.load(Ordering::Relaxed),
+            last_db_batch_slot: self.last_db_batch_slot.load(Ordering::Relaxed),
+            last_db_batch_timestamp: self.last_db_batch_timestamp.load(Ordering::Relaxed),
+            pending_slot_data_count: self.pending_slot_data_count.load(Ordering::Relaxed),
+            slot_status_updates: self.slot_status_updates.load(Ordering::Relaxed),
+            block_metadata_received: self.block_metadata_received.load(Ordering::Relaxed),
         }
     }
 }
@@ -199,4 +228,11 @@ pub struct AirlockStatsSnapshot {
     pub queue_capacity: usize,
     pub worker_pool_size: usize,
     pub queue_throughput: usize,
+    pub db_batch_success_count: usize,
+    pub db_batch_error_count: usize,
+    pub last_db_batch_slot: usize,
+    pub last_db_batch_timestamp: usize,
+    pub pending_slot_data_count: usize,
+    pub slot_status_updates: usize,
+    pub block_metadata_received: usize,
 }

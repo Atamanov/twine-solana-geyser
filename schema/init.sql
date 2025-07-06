@@ -2,6 +2,27 @@
 -- This is usually handled by Docker, but included for completeness
 -- CREATE DATABASE twine_solana_db;
 
+-- Create a dedicated user for the Geyser plugin
+DO
+$do$
+BEGIN
+   IF NOT EXISTS (
+      SELECT FROM pg_catalog.pg_roles
+      WHERE  rolname = 'geyser_writer') THEN
+
+      CREATE ROLE geyser_writer LOGIN PASSWORD 'geyser_writer_password';
+   END IF;
+END
+$do$;
+
+-- Grant privileges to the new user
+GRANT CONNECT ON DATABASE twine_solana_db TO geyser_writer;
+GRANT USAGE ON SCHEMA public TO geyser_writer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO geyser_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO geyser_writer;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO geyser_writer;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO geyser_writer;
+
 -- Enable required extensions
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
@@ -21,8 +42,21 @@ CREATE TABLE IF NOT EXISTS slots (
     accounts_delta_hash VARCHAR(44), -- NULL after LtHash fork
     accounts_lthash_checksum VARCHAR(44), -- NULL before LtHash fork
     epoch_accounts_hash VARCHAR(44),
+    -- Slot status tracking
+    status VARCHAR(20) DEFAULT 'first_shred_received' NOT NULL CHECK (status IN ('first_shred_received', 'completed', 'processed', 'confirmed', 'rooted')),
+    -- Timestamps for status changes
+    first_shred_received_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    processed_at TIMESTAMPTZ,
+    confirmed_at TIMESTAMPTZ,
     -- Timestamp when the slot was rooted and this record was committed
-    rooted_at TIMESTAMPTZ DEFAULT NOW()
+    rooted_at TIMESTAMPTZ DEFAULT NOW(),
+    -- Block metadata fields
+    blockhash VARCHAR(44),
+    parent_slot BIGINT,
+    executed_transaction_count BIGINT,
+    entry_count BIGINT,
+    block_metadata_updated_at TIMESTAMPTZ
 );
 
 -- Convert slots table to TimescaleDB hypertable
@@ -80,6 +114,9 @@ CREATE TABLE IF NOT EXISTS proof_requests (
 CREATE INDEX IF NOT EXISTS idx_slots_rooted_at ON slots (rooted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_slots_bank_hash ON slots (bank_hash);
 CREATE INDEX IF NOT EXISTS idx_slots_parent_bank_hash ON slots (parent_bank_hash);
+CREATE INDEX IF NOT EXISTS idx_slots_status ON slots (status);
+CREATE INDEX IF NOT EXISTS idx_slots_processed_at ON slots (processed_at DESC) WHERE processed_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_slots_confirmed_at ON slots (confirmed_at DESC) WHERE confirmed_at IS NOT NULL;
 
 -- Account changes indexes - optimized for common queries
 CREATE INDEX IF NOT EXISTS idx_account_changes_pubkey_slot ON account_changes (account_pubkey, slot DESC);
@@ -97,8 +134,8 @@ ALTER TABLE account_changes SET (timescaledb.compress, timescaledb.compress_segm
 
 -- Create compression policy for older data (optional, can be adjusted)
 -- Compress chunks older than 7 days
-SELECT add_compression_policy('slots', INTERVAL '7 days', if_not_exists => TRUE);
-SELECT add_compression_policy('account_changes', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_compression_policy('slots', INTERVAL '7 days');
+SELECT add_compression_policy('account_changes', INTERVAL '7 days');
 
 -- Create retention policies (optional, adjust as needed)
 -- Drop chunks older than 30 days
@@ -122,8 +159,7 @@ WITH NO DATA;
 SELECT add_continuous_aggregate_policy('slot_stats_hourly',
     start_offset => INTERVAL '2 hours',
     end_offset => INTERVAL '1 hour',
-    schedule_interval => INTERVAL '30 minutes',
-    if_not_exists => TRUE
+    schedule_interval => INTERVAL '30 minutes'
 );
 
 -- Create function for efficient batch inserts
@@ -153,20 +189,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Create database user for the geyser plugin
--- Note: Password should match the one in config.json.example and docker-compose.yml
-DO $$ 
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_user WHERE usename = 'geyser_writer') THEN
-        CREATE USER geyser_writer WITH PASSWORD 'geyser_writer_password';
-    END IF;
-END $$;
-
--- Grant necessary permissions
-GRANT CONNECT ON DATABASE twine_solana_db TO geyser_writer;
-GRANT USAGE ON SCHEMA public TO geyser_writer;
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO geyser_writer;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO geyser_writer;
 
 -- Performance tuning recommendations (to be set in postgresql.conf or via ALTER SYSTEM)
 -- These are suggestions and should be adjusted based on your hardware

@@ -1,0 +1,14 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Twine TimescaleDB",
+      "Group": "Servers",
+      "Host": "timescaledb",
+      "Port": 5432,
+      "MaintenanceDB": "twine_solana_db",
+      "Username": "geyser_writer",
+      "SSLMode": "prefer",
+      "PassFile": "/var/lib/pgadmin/pgpass"
+    }
+  }
+}

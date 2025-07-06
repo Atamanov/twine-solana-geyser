@@ -7,7 +7,7 @@ datasources:
     access: proxy
     url: timescaledb:5432
     database: twine_solana_db
-    user: postgres
+    user: geyser_writer
     jsonData:
       sslmode: 'disable'
       maxOpenConns: 100
@@ -17,7 +17,7 @@ datasources:
       postgresVersion: 1600
       timescaledb: true
     secureJsonData:
-      password: postgres_password
+      password: geyser_writer_password
     editable: true
 
   # Prometheus datasource for metrics

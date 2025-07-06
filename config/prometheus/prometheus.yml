@@ -1,51 +1,30 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
-  external_labels:
-    monitor: 'twine-geyser'
-    environment: 'production'
-
-# Alerting configuration
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: []  # Add alertmanager targets if needed
-
-# Load rules files
-rule_files:
-  # - 'alerts/*.yml'
 
 scrape_configs:
-  # PostgreSQL/TimescaleDB metrics
-  - job_name: 'postgres'
-    static_configs:
-      - targets: ['postgres-exporter:9187']
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
-        replacement: 'timescaledb'
-    metric_relabel_configs:
-      - source_labels: [__name__]
-        regex: 'pg_.*'
-        target_label: subsystem
-        replacement: 'database'
-
-  # Solana validator metrics (if available)
-  - job_name: 'solana-validator'
-    static_configs:
-      - targets: ['localhost:8899']  # Adjust to your validator's metrics endpoint
-    metrics_path: '/metrics'
-    scrape_interval: 30s
-    scrape_timeout: 25s
-
   # Geyser plugin metrics
   - job_name: 'geyser-plugin'
     static_configs:
-      - targets: ['host.docker.internal:9091']  # Plugin metrics on port 9091
+      - targets: ['host.docker.internal:9091']
     metrics_path: '/metrics'
     scrape_interval: 10s
 
-  # Node exporter for system metrics (optional)
-  - job_name: 'node-exporter'
+  # PostgreSQL metrics (if using postgres-exporter)
+  - job_name: 'postgres'
     static_configs:
-      - targets: ['localhost:9101']  # If node exporter is running
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: 'twine-geyser'
+    static_configs:
+      # Try multiple approaches to reach the host
+      - targets: ['host.docker.internal:9091']
+        labels:
+          instance: 'host-docker'
+      - targets: ['172.17.0.1:9091']
+        labels:
+          instance: 'docker-bridge'
+      # If running on the same network
+      - targets: ['twine-geyser:9091']
+        labels:
+          instance: 'container-name'

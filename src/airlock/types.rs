@@ -216,6 +216,15 @@ pub enum DbWriteCommand {
         accounts_delta_hash: Option<String>,
         accounts_lthash_checksum: Option<String>,
         epoch_accounts_hash: Option<String>,
+        // Block metadata fields
+        blockhash: Option<String>,
+        parent_slot: Option<u64>,
+        executed_transaction_count: Option<u64>,
+        entry_count: Option<u64>,
+    },
+    SlotStatusUpdate {
+        slot: u64,
+        status: String,
     },
     AccountChanges {
         slot: u64,
