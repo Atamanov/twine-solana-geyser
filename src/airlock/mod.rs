@@ -35,7 +35,8 @@ pub struct AirlockStats {
     pub last_db_batch_slot: AtomicUsize,
     pub last_db_batch_timestamp: AtomicUsize,
     // Geyser plugin internal metrics
-    pub pending_slot_data_count: AtomicUsize,
+    pub airlock_pending_slots: AtomicUsize,
+    pub airlock_missing_data_slots: AtomicUsize,
     pub slot_status_updates: AtomicUsize,
     pub block_metadata_received: AtomicUsize,
 }
@@ -60,7 +61,8 @@ impl Default for AirlockStats {
             last_db_batch_slot: AtomicUsize::new(0),
             last_db_batch_timestamp: AtomicUsize::new(0),
             // Geyser plugin internal metrics
-            pending_slot_data_count: AtomicUsize::new(0),
+            airlock_pending_slots: AtomicUsize::new(0),
+            airlock_missing_data_slots: AtomicUsize::new(0),
             slot_status_updates: AtomicUsize::new(0),
             block_metadata_received: AtomicUsize::new(0),
         }
@@ -207,7 +209,8 @@ impl AirlockStats {
             db_batch_error_count: self.db_batch_error_count.load(Ordering::Relaxed),
             last_db_batch_slot: self.last_db_batch_slot.load(Ordering::Relaxed),
             last_db_batch_timestamp: self.last_db_batch_timestamp.load(Ordering::Relaxed),
-            pending_slot_data_count: self.pending_slot_data_count.load(Ordering::Relaxed),
+            airlock_pending_slots: self.airlock_pending_slots.load(Ordering::Relaxed),
+            airlock_missing_data_slots: self.airlock_missing_data_slots.load(Ordering::Relaxed),
             slot_status_updates: self.slot_status_updates.load(Ordering::Relaxed),
             block_metadata_received: self.block_metadata_received.load(Ordering::Relaxed),
         }
@@ -232,7 +235,8 @@ pub struct AirlockStatsSnapshot {
     pub db_batch_error_count: usize,
     pub last_db_batch_slot: usize,
     pub last_db_batch_timestamp: usize,
-    pub pending_slot_data_count: usize,
+    pub airlock_pending_slots: usize,
+    pub airlock_missing_data_slots: usize,
     pub slot_status_updates: usize,
     pub block_metadata_received: usize,
 }

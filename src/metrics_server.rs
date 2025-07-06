@@ -191,9 +191,13 @@ twine_geyser_updates_per_second {:.2}
 # TYPE twine_geyser_slots_per_second gauge
 twine_geyser_slots_per_second {:.2}
 
-# HELP twine_geyser_pending_slot_data_count Number of slots with pending data
-# TYPE twine_geyser_pending_slot_data_count gauge
-twine_geyser_pending_slot_data_count {}
+# HELP twine_geyser_airlock_pending_slots Number of slots in airlock
+# TYPE twine_geyser_airlock_pending_slots gauge
+twine_geyser_airlock_pending_slots {}
+
+# HELP twine_geyser_airlock_missing_data_slots Number of slots waiting for complete data
+# TYPE twine_geyser_airlock_missing_data_slots gauge
+twine_geyser_airlock_missing_data_slots {}
 
 # HELP twine_geyser_slot_status_updates Total slot status updates sent
 # TYPE twine_geyser_slot_status_updates counter
@@ -226,7 +230,8 @@ twine_geyser_block_metadata_received {}
         uptime_seconds,
         updates_per_second,
         slots_per_second,
-        snapshot.pending_slot_data_count,
+        snapshot.airlock_pending_slots,
+        snapshot.airlock_missing_data_slots,
         snapshot.slot_status_updates,
         snapshot.block_metadata_received,
     );

@@ -20,19 +20,6 @@ use crate::metrics_server::MetricsServer;
 use crate::worker_pool::WorkerPool;
 use crate::api_server::ApiServerHandle;
 
-/// Container for slot data waiting to be persisted
-#[derive(Debug)]
-struct PendingSlotData {
-    components: BankHashComponentsInfo,
-    delta_lthash: Vec<u8>,
-    cumulative_lthash: Vec<u8>,
-    // Block metadata fields
-    blockhash: Option<String>,
-    parent_slot: Option<u64>,
-    executed_transaction_count: Option<u64>,
-    entry_count: Option<u64>,
-}
-
 /// Main plugin state
 #[derive(Debug)]
 pub struct TwineGeyserPlugin {
@@ -54,8 +41,6 @@ pub struct TwineGeyserPlugin {
     proof_scheduler: Option<tokio::task::JoinHandle<()>>,
     /// Runtime for async tasks
     runtime: Option<Runtime>,
-    /// Temporary storage for slot data until it's rooted
-    pending_slot_data: Arc<DashMap<u64, PendingSlotData>>,
     /// Statistics for monitoring
     stats: Arc<AirlockStats>,
     /// Last slot when stats were logged
@@ -80,7 +65,6 @@ impl Default for TwineGeyserPlugin {
             last_proof_scheduling_slot: Arc::new(AtomicU64::new(0)),
             proof_scheduler: None,
             runtime: None,
-            pending_slot_data: Arc::new(DashMap::new()),
             stats: Arc::new(AirlockStats::default()),
             last_stats_log_slot: AtomicU64::new(0),
             metrics_server: None,
@@ -315,55 +299,46 @@ impl GeyserPlugin for TwineGeyserPlugin {
         );
 
         // Convert LtHash to bytes
-        let delta_bytes = delta_lthash
+        let delta_bytes: Vec<u8> = delta_lthash
             .0
             .iter()
             .flat_map(|&x| x.to_le_bytes())
             .collect();
-        let cumulative_bytes = cumulative_lthash
+        let cumulative_bytes: Vec<u8> = cumulative_lthash
             .0
             .iter()
             .flat_map(|&x| x.to_le_bytes())
             .collect();
 
-        // Store or update the pending slot data
-        if let Some(mut pending) = self.pending_slot_data.get_mut(&slot) {
-            pending.delta_lthash = delta_bytes;
-            pending.cumulative_lthash = cumulative_bytes;
-            info!("Updated existing pending slot data for slot {}", slot);
-        } else {
-            // If we get LtHash before bank components, create with placeholder components
-            self.pending_slot_data.insert(
-                slot,
-                PendingSlotData {
-                    components: BankHashComponentsInfo {
-                        slot,
-                        bank_hash: String::new(),
-                        parent_bank_hash: String::new(),
-                        signature_count: 0,
-                        last_blockhash: String::new(),
-                        accounts_delta_hash: None,
-                        accounts_lthash_checksum: None,
-                        epoch_accounts_hash: None,
-                    },
-                    delta_lthash: delta_bytes,
-                    cumulative_lthash: cumulative_bytes,
-                    blockhash: None,
-                    parent_slot: None,
-                    executed_transaction_count: None,
-                    entry_count: None,
-                },
-            );
-            info!(
-                "Created new pending slot data for slot {} with LtHash",
-                slot
-            );
+        // Get or create airlock slot data
+        let slot_data = self
+            .airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
+
+        // Atomically increment writer count while we update
+        slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
+
+        // Update LtHash data
+        *slot_data.delta_lthash.write() = Some(delta_bytes);
+        *slot_data.cumulative_lthash.write() = Some(cumulative_bytes);
+        
+        info!("Updated airlock slot {} with LtHash data", slot);
+
+        // Check if we now have complete data and slot is rooted
+        if slot_data.is_rooted() && slot_data.has_complete_data() {
+            info!("Slot {} has complete data after LtHash update, triggering write", slot);
+            self.try_write_complete_slot(slot)?;
         }
 
-        // Update pending slot data count
+        // Atomically decrement writer count
+        slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+
+        // Update stats
         self.stats
-            .pending_slot_data_count
-            .store(self.pending_slot_data.len(), Ordering::Relaxed);
+            .active_slots
+            .store(self.airlock.len(), Ordering::Relaxed);
 
         Ok(())
     }
@@ -376,37 +351,34 @@ impl GeyserPlugin for TwineGeyserPlugin {
             slot, components.bank_hash, components.parent_bank_hash, components.signature_count
         );
 
-        // Store or update the pending slot data
-        if let Some(mut pending) = self.pending_slot_data.get_mut(&slot) {
-            pending.components = components;
-            info!(
-                "Updated existing pending slot data for slot {} with bank components",
-                slot
-            );
-        } else {
-            // If we get bank components before LtHash, create with empty LtHash
-            self.pending_slot_data.insert(
-                slot,
-                PendingSlotData {
-                    components,
-                    delta_lthash: vec![],
-                    cumulative_lthash: vec![],
-                    blockhash: None,
-                    parent_slot: None,
-                    executed_transaction_count: None,
-                    entry_count: None,
-                },
-            );
-            info!(
-                "Created new pending slot data for slot {} with bank components",
-                slot
-            );
+        // Get or create airlock slot data
+        let slot_data = self
+            .airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
+
+        // Atomically increment writer count while we update
+        slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
+
+        // Update bank hash components
+        *slot_data.bank_hash_components.write() = Some(components);
+        
+        info!("Updated airlock slot {} with bank hash components", slot);
+
+        // Check if we now have complete data and slot is rooted
+        if slot_data.is_rooted() && slot_data.has_complete_data() {
+            info!("Slot {} has complete data after bank hash update, triggering write", slot);
+            self.try_write_complete_slot(slot)?;
         }
 
-        // Update pending slot data count
+        // Atomically decrement writer count
+        slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+
+        // Update stats
         self.stats
-            .pending_slot_data_count
-            .store(self.pending_slot_data.len(), Ordering::Relaxed);
+            .active_slots
+            .store(self.airlock.len(), Ordering::Relaxed);
 
         Ok(())
     }
@@ -448,41 +420,37 @@ impl GeyserPlugin for TwineGeyserPlugin {
                     .block_metadata_received
                     .fetch_add(1, Ordering::Relaxed);
 
-                // Store block metadata in pending slot data
-                if let Some(mut pending) = self.pending_slot_data.get_mut(&info.slot) {
-                    pending.blockhash = Some(info.blockhash.to_string());
-                    pending.parent_slot = Some(info.parent_slot);
-                    pending.executed_transaction_count = Some(info.executed_transaction_count);
-                    pending.entry_count = Some(info.entry_count);
-                } else {
-                    // If we get block metadata before other data, create entry
-                    self.pending_slot_data.insert(
-                        info.slot,
-                        PendingSlotData {
-                            components: BankHashComponentsInfo {
-                                slot: info.slot,
-                                bank_hash: String::new(),
-                                parent_bank_hash: String::new(),
-                                signature_count: 0,
-                                last_blockhash: String::new(),
-                                accounts_delta_hash: None,
-                                accounts_lthash_checksum: None,
-                                epoch_accounts_hash: None,
-                            },
-                            delta_lthash: vec![],
-                            cumulative_lthash: vec![],
-                            blockhash: Some(info.blockhash.to_string()),
-                            parent_slot: Some(info.parent_slot),
-                            executed_transaction_count: Some(info.executed_transaction_count),
-                            entry_count: Some(info.entry_count),
-                        },
-                    );
+                // Get or create airlock slot data
+                let slot_data = self
+                    .airlock
+                    .entry(info.slot)
+                    .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                    .clone();
+
+                // Atomically increment writer count while we update
+                slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
+
+                // Update block metadata
+                *slot_data.blockhash.write() = Some(info.blockhash.to_string());
+                *slot_data.parent_slot.write() = Some(info.parent_slot);
+                *slot_data.executed_transaction_count.write() = Some(info.executed_transaction_count);
+                *slot_data.entry_count.write() = Some(info.entry_count);
+                
+                info!("Updated airlock slot {} with block metadata", info.slot);
+
+                // Check if we now have complete data and slot is rooted
+                if slot_data.is_rooted() && slot_data.has_complete_data() {
+                    info!("Slot {} has complete data after block metadata update, triggering write", info.slot);
+                    self.try_write_complete_slot(info.slot)?;
                 }
 
-                // Update pending slot data count
+                // Atomically decrement writer count
+                slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+
+                // Update stats
                 self.stats
-                    .pending_slot_data_count
-                    .store(self.pending_slot_data.len(), Ordering::Relaxed);
+                    .active_slots
+                    .store(self.airlock.len(), Ordering::Relaxed);
             }
         }
         Ok(())
@@ -503,6 +471,119 @@ impl GeyserPlugin for TwineGeyserPlugin {
 }
 
 impl TwineGeyserPlugin {
+    fn try_write_complete_slot(&self, slot: u64) -> PluginResult<()> {
+        // Check if slot exists and has complete data
+        if let Some(slot_data_ref) = self.airlock.get(&slot) {
+            let slot_data = slot_data_ref.value();
+            if slot_data.has_complete_data() && slot_data.is_rooted() {
+                // Drop the reference before we try to remove
+                drop(slot_data_ref);
+                
+                // Remove the slot from airlock
+                if let Some((_, slot_data)) = self.airlock.remove(&slot) {
+                    // Wait for all writers to finish
+                    while slot_data.writer_count.load(Ordering::Acquire) > 0 {
+                        std::hint::spin_loop();
+                    }
+                    
+                    self.write_slot_to_database(slot, slot_data)?;
+                }
+            }
+            else {
+                warn!("Slot {} has incomplete data, skipping write", slot);
+            }
+        }
+        
+        Ok(())
+    }
+
+    fn write_slot_to_database(&self, slot: u64, slot_data: Arc<AirlockSlotData>) -> PluginResult<()> {
+        let queue = self
+            .db_writer_queue
+            .as_ref()
+            .ok_or_else(|| GeyserPluginError::Custom("Plugin not initialized".into()))?;
+
+        // Extract data from airlock
+        let components = slot_data.bank_hash_components.read().clone()
+            .unwrap_or_else(|| BankHashComponentsInfo {
+                slot,
+                bank_hash: String::new(),
+                parent_bank_hash: String::new(),
+                signature_count: 0,
+                last_blockhash: String::new(),
+                accounts_delta_hash: None,
+                accounts_lthash_checksum: None,
+                epoch_accounts_hash: None,
+            });
+
+        let delta_lthash = slot_data.delta_lthash.read().clone().unwrap_or_default();
+        let cumulative_lthash = slot_data.cumulative_lthash.read().clone().unwrap_or_default();
+        let blockhash = slot_data.blockhash.read().clone();
+        let parent_slot = slot_data.parent_slot.read().clone();
+        let executed_transaction_count = slot_data.executed_transaction_count.read().clone();
+        let entry_count = slot_data.entry_count.read().clone();
+
+        info!(
+            "Writing complete slot {} data to DB: bank_hash={}, lthash_len={}, status={}",
+            slot,
+            components.bank_hash,
+            delta_lthash.len(),
+            slot_data.status.read()
+        );
+
+        // Send slot data
+        queue
+            .send(DbWriteCommand::SlotData {
+                slot,
+                bank_hash: components.bank_hash,
+                parent_bank_hash: components.parent_bank_hash,
+                signature_count: components.signature_count,
+                last_blockhash: components.last_blockhash,
+                delta_lthash,
+                cumulative_lthash,
+                accounts_delta_hash: components.accounts_delta_hash,
+                accounts_lthash_checksum: components.accounts_lthash_checksum,
+                epoch_accounts_hash: components.epoch_accounts_hash,
+                blockhash,
+                parent_slot,
+                executed_transaction_count,
+                entry_count,
+            })
+            .map_err(|_| GeyserPluginError::Custom("Failed to send slot data".into()))?;
+
+        self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
+
+        // Send account changes if any
+        let mut monitored_changes = Vec::new();
+        while let Some(change) = slot_data.buffer.pop() {
+            if self.monitored_accounts.contains(&change.pubkey) {
+                monitored_changes.push(change);
+            }
+        }
+
+        if !monitored_changes.is_empty() {
+            queue
+                .send(DbWriteCommand::AccountChanges {
+                    slot,
+                    changes: monitored_changes,
+                })
+                .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
+
+            self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .slots_with_monitored_accounts
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Update stats
+        self.stats.sealed_slots.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .active_slots
+            .store(self.airlock.len(), Ordering::Relaxed);
+
+        Ok(())
+    }
+    
     fn handle_rooted_slot(&self, slot: u64) -> PluginResult<()> {
         info!("Rooted slot: {}", slot);
         // Update validator slot in chain monitor
@@ -510,11 +591,11 @@ impl TwineGeyserPlugin {
             monitor.update_validator_slot(slot);
         }
 
-        // Clean up old pending slot data (slots that are more than 100 slots behind)
+        // Clean up old airlock entries (slots that are more than 100 slots behind)
         let min_slot = slot.saturating_sub(100);
         let mut removed_count = 0;
-        self.pending_slot_data.retain(|&pending_slot, _| {
-            if pending_slot < min_slot {
+        self.airlock.retain(|&airlock_slot, _| {
+            if airlock_slot < min_slot {
                 removed_count += 1;
                 false
             } else {
@@ -522,7 +603,7 @@ impl TwineGeyserPlugin {
             }
         });
         if removed_count > 0 {
-            info!("Cleaned up {} old pending slot data entries", removed_count);
+            info!("Cleaned up {} old airlock entries", removed_count);
         }
 
         let queue = self
@@ -530,110 +611,17 @@ impl TwineGeyserPlugin {
             .as_ref()
             .ok_or_else(|| GeyserPluginError::Custom("Plugin not initialized".into()))?;
 
-        // Always push slot data
-        if let Some((_, pending_data)) = self.pending_slot_data.remove(&slot) {
-            let components = pending_data.components;
+        // Get or create airlock slot data
+        let slot_data = self
+            .airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
 
-            // Check if we have valid data
-            if components.bank_hash.is_empty() {
-                warn!("Slot {} has empty bank_hash, using placeholder", slot);
-            }
-            if pending_data.delta_lthash.is_empty() {
-                warn!("Slot {} has empty delta_lthash, using zero bytes", slot);
-            }
-            if pending_data.cumulative_lthash.is_empty() {
-                warn!(
-                    "Slot {} has empty cumulative_lthash, using zero bytes",
-                    slot
-                );
-            }
+        // Update slot status to rooted
+        *slot_data.status.write() = "rooted".to_string();
 
-            info!(
-                "Writing slot {} data to DB: bank_hash={}, has_lthash={}, has_block_metadata={}",
-                slot,
-                components.bank_hash,
-                !pending_data.delta_lthash.is_empty(),
-                pending_data.blockhash.is_some()
-            );
-
-            // Ensure we have at least empty vectors for LtHash if not provided
-            let delta_lthash = if pending_data.delta_lthash.is_empty() {
-                vec![0u8; 32] // LtHash is 256 bits = 32 bytes
-            } else {
-                pending_data.delta_lthash
-            };
-
-            let cumulative_lthash = if pending_data.cumulative_lthash.is_empty() {
-                vec![0u8; 32] // LtHash is 256 bits = 32 bytes
-            } else {
-                pending_data.cumulative_lthash
-            };
-
-            queue
-                .send(DbWriteCommand::SlotData {
-                    slot,
-                    bank_hash: if components.bank_hash.is_empty() {
-                        format!("PLACEHOLDER_{}", slot)
-                    } else {
-                        components.bank_hash
-                    },
-                    parent_bank_hash: if components.parent_bank_hash.is_empty() {
-                        format!("PLACEHOLDER_{}", slot.saturating_sub(1))
-                    } else {
-                        components.parent_bank_hash
-                    },
-                    signature_count: components.signature_count,
-                    last_blockhash: if components.last_blockhash.is_empty() {
-                        format!("PLACEHOLDER_{}", slot)
-                    } else {
-                        components.last_blockhash
-                    },
-                    delta_lthash,
-                    cumulative_lthash,
-                    accounts_delta_hash: components.accounts_delta_hash,
-                    accounts_lthash_checksum: components.accounts_lthash_checksum,
-                    epoch_accounts_hash: components.epoch_accounts_hash,
-                    // Include block metadata if available
-                    blockhash: pending_data.blockhash,
-                    parent_slot: pending_data.parent_slot,
-                    executed_transaction_count: pending_data.executed_transaction_count,
-                    entry_count: pending_data.entry_count,
-                })
-                .map_err(|_| GeyserPluginError::Custom("Failed to send slot data".into()))?;
-
-            self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
-
-            // Update pending slot data count after removal
-            self.stats
-                .pending_slot_data_count
-                .store(self.pending_slot_data.len(), Ordering::Relaxed);
-        } else {
-            warn!("No pending slot data found for rooted slot {}", slot);
-
-            // Create minimal slot data to ensure we at least record the rooted slot
-            queue
-                .send(DbWriteCommand::SlotData {
-                    slot,
-                    bank_hash: format!("MISSING_{}", slot),
-                    parent_bank_hash: format!("MISSING_{}", slot.saturating_sub(1)),
-                    signature_count: 0,
-                    last_blockhash: format!("MISSING_{}", slot),
-                    delta_lthash: vec![0u8; 32],
-                    cumulative_lthash: vec![0u8; 32],
-                    accounts_delta_hash: None,
-                    accounts_lthash_checksum: None,
-                    epoch_accounts_hash: None,
-                    blockhash: None,
-                    parent_slot: None,
-                    executed_transaction_count: None,
-                    entry_count: None,
-                })
-                .map_err(|_| GeyserPluginError::Custom("Failed to send slot data".into()))?;
-
-            self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
-        }
-
-        // Also send status update to mark as rooted
+        // Send status update
         queue
             .send(DbWriteCommand::SlotStatusUpdate {
                 slot,
@@ -646,48 +634,31 @@ impl TwineGeyserPlugin {
             .slot_status_updates
             .fetch_add(1, Ordering::Relaxed);
 
-        // Handle account changes if any
-        if let Some((_, slot_data)) = self.airlock.remove(&slot) {
-            // Wait for all writers to finish
-            while slot_data.writer_count.load(Ordering::Acquire) > 0 {
-                std::hint::spin_loop();
-            }
-
-            // Collect all changes, but only keep full data for monitored accounts
-            let mut monitored_changes = Vec::new();
-
-            while let Some(change) = slot_data.buffer.pop() {
-                // Only keep changes for monitored accounts
-                if self.monitored_accounts.contains(&change.pubkey) {
-                    monitored_changes.push(change);
-                }
-                // For non-monitored accounts, we just discard the data
-                // The slot itself is already recorded with LtHash
-            }
-
-            // Send monitored account changes to DB
-            if !monitored_changes.is_empty() {
-                queue
-                    .send(DbWriteCommand::AccountChanges {
-                        slot,
-                        changes: monitored_changes,
-                    })
-                    .map_err(|_| {
-                        GeyserPluginError::Custom("Failed to send account changes".into())
-                    })?;
-
-                self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
-                self.stats
-                    .slots_with_monitored_accounts
-                    .fetch_add(1, Ordering::Relaxed);
-            }
+        // Check if we have complete data
+        if slot_data.has_complete_data() {
+            info!(
+                "Slot {} rooted with complete data, writing to database",
+                slot
+            );
+            self.try_write_complete_slot(slot)?;
+        } else {
+            // Log what we're missing
+            let has_bank_hash = slot_data.bank_hash_components.read().as_ref()
+                .map(|c| !c.bank_hash.is_empty())
+                .unwrap_or(false);
+            let has_delta = slot_data.delta_lthash.read().is_some();
+            let has_cumulative = slot_data.cumulative_lthash.read().is_some();
+            
+            info!(
+                "Slot {} rooted but missing data - bank_hash: {}, delta_lthash: {}, cumulative_lthash: {}, keeping in airlock",
+                slot, has_bank_hash, has_delta, has_cumulative
+            );
         }
 
         // Update stats
-        self.stats.sealed_slots.fetch_add(1, Ordering::Relaxed);
         self.stats
             .active_slots
-            .store(self.airlock.len() as usize, Ordering::Relaxed);
+            .store(self.airlock.len(), Ordering::Relaxed);
 
         // Log stats every 100 rooted slots
         let last_log = self.last_stats_log_slot.load(Ordering::Relaxed);
@@ -700,6 +671,16 @@ impl TwineGeyserPlugin {
     }
 
     fn handle_processed_slot(&self, slot: u64) -> PluginResult<()> {
+        // Get or create airlock slot data
+        let slot_data = self
+            .airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
+
+        // Update slot status
+        *slot_data.status.write() = "processed".to_string();
+
         let queue = self
             .db_writer_queue
             .as_ref()

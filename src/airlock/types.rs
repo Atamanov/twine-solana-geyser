@@ -82,6 +82,20 @@ pub struct AirlockSlotData {
     pub buffer: SegQueue<OwnedAccountChange>,
     /// Tracks if a monitored account was seen in this slot
     pub contains_monitored_change: AtomicBool,
+    /// Bank hash components (may arrive at any time)
+    pub bank_hash_components: parking_lot::RwLock<Option<BankHashComponentsInfo>>,
+    /// LtHash data (may arrive at any time)
+    pub delta_lthash: parking_lot::RwLock<Option<Vec<u8>>>,
+    pub cumulative_lthash: parking_lot::RwLock<Option<Vec<u8>>>,
+    /// Block metadata (may arrive at any time)
+    pub blockhash: parking_lot::RwLock<Option<String>>,
+    pub parent_slot: parking_lot::RwLock<Option<u64>>,
+    pub executed_transaction_count: parking_lot::RwLock<Option<u64>>,
+    pub entry_count: parking_lot::RwLock<Option<u64>>,
+    /// Slot status (processed, confirmed, rooted, etc)
+    pub status: parking_lot::RwLock<String>,
+    /// Timestamp when slot was created
+    pub created_at: std::time::Instant,
 }
 
 impl SlotAirlock {
@@ -100,7 +114,43 @@ impl AirlockSlotData {
             writer_count: AtomicU32::new(0),
             buffer: SegQueue::new(),
             contains_monitored_change: AtomicBool::new(false),
+            bank_hash_components: parking_lot::RwLock::new(None),
+            delta_lthash: parking_lot::RwLock::new(None),
+            cumulative_lthash: parking_lot::RwLock::new(None),
+            blockhash: parking_lot::RwLock::new(None),
+            parent_slot: parking_lot::RwLock::new(None),
+            executed_transaction_count: parking_lot::RwLock::new(None),
+            entry_count: parking_lot::RwLock::new(None),
+            status: parking_lot::RwLock::new("created".to_string()),
+            created_at: std::time::Instant::now(),
         }
+    }
+
+    /// Check if we have all required data for database write
+    pub fn has_complete_data(&self) -> bool {
+        let has_bank_hash = self
+            .bank_hash_components
+            .read()
+            .as_ref()
+            .map(|c| !c.bank_hash.is_empty())
+            .unwrap_or(false);
+        let has_lthash =
+            self.delta_lthash.read().is_some() && self.cumulative_lthash.read().is_some();
+        let has_blockhash = self.blockhash.read().is_some();
+        let has_parent_slot = self.parent_slot.read().is_some();
+        let has_executed_transaction_count = self.executed_transaction_count.read().is_some();
+        let has_entry_count = self.entry_count.read().is_some();
+        has_bank_hash
+            && has_lthash
+            && has_blockhash
+            && has_parent_slot
+            && has_executed_transaction_count
+            && has_entry_count
+    }
+
+    /// Check if slot is rooted
+    pub fn is_rooted(&self) -> bool {
+        *self.status.read() == "rooted"
     }
 }
 
@@ -152,7 +202,7 @@ pub struct PluginConfig {
     pub max_queue_size: usize,
     pub batch_size: usize,
     pub batch_timeout_ms: u64,
-    
+
     // API server configuration
     pub api_port: Option<u16>,
 
