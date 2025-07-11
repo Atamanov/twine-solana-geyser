@@ -404,12 +404,8 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
             hasher.hash(parent_hash.as_ref());
         }
         
-        // Add accounts delta hash or lthash checksum
-        if let Some(delta_hash) = &slot.accounts_delta_hash {
-            if let Ok(hash) = Hash::from_str(delta_hash) {
-                hasher.hash(hash.as_ref());
-            }
-        } else if let Some(checksum) = &slot.accounts_lthash_checksum {
+        // Add accounts lthash checksum
+        if let Some(checksum) = &slot.accounts_lthash_checksum {
             if let Ok(hash) = Hash::from_str(checksum) {
                 hasher.hash(hash.as_ref());
             }
@@ -430,6 +426,10 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
             warn!(
                 "Bank hash mismatch at slot {}: expected {}, calculated {}",
                 slot.slot, slot.bank_hash, calculated_hash
+            );
+            warn!(
+                "  Components: parent_bank_hash={}, accounts_delta_hash={:?}, accounts_lthash_checksum={:?}, signature_count={}, last_blockhash={}",
+                slot.parent_bank_hash, slot.accounts_delta_hash, slot.accounts_lthash_checksum, slot.signature_count, slot.last_blockhash
             );
         }
 
@@ -584,23 +584,36 @@ fn format_lthash(lthash: &LtHash) -> String {
 }
 
 fn validate_checksum(slot: &SlotData) -> ChecksumValidation {
-    // Calculate checksum from cumulative_lthash
-    let mut hasher = Hasher::default();
-    hasher.hash(&slot.cumulative_lthash);
-    let calculated_checksum = hasher.result().to_string();
-    
-    let valid = if let Some(stored) = &slot.accounts_lthash_checksum {
-        &calculated_checksum == stored
-    } else {
-        // No checksum stored (pre-LtHash fork)
-        true
-    };
-    
-    ChecksumValidation {
-        slot: slot.slot,
-        calculated_checksum,
-        stored_checksum: slot.accounts_lthash_checksum.clone(),
-        valid,
+    // Parse the LtHash first
+    match parse_lthash(&slot.cumulative_lthash) {
+        Ok(lthash) => {
+            // Calculate checksum from LtHash
+            let checksum = lthash.checksum();
+            let calculated_checksum = checksum.to_string();
+            
+            let valid = if let Some(stored) = &slot.accounts_lthash_checksum {
+                &calculated_checksum == stored
+            } else {
+                // No checksum stored (pre-LtHash fork)
+                true
+            };
+            
+            ChecksumValidation {
+                slot: slot.slot,
+                calculated_checksum,
+                stored_checksum: slot.accounts_lthash_checksum.clone(),
+                valid,
+            }
+        }
+        Err(e) => {
+            warn!("Failed to parse LtHash for checksum validation: {}", e);
+            ChecksumValidation {
+                slot: slot.slot,
+                calculated_checksum: "Error".to_string(),
+                stored_checksum: slot.accounts_lthash_checksum.clone(),
+                valid: false,
+            }
+        }
     }
 }
 
