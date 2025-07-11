@@ -278,7 +278,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
     }
 
     fn notify_account_change(&self, account_change: OwnedAccountChange) -> PluginResult<()> {
-        info!("Received account change for slot {}, ", account_change.slot);
+        debug!("Received account change for slot {}, ", account_change.slot);
         let slot = account_change.slot;
         let current_epoch = slot_to_epoch(slot);
         let stored_epoch = self.current_epoch.load(Ordering::Relaxed);
@@ -288,7 +288,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Handle epoch boundary detection for stake accounts
         if current_epoch > stored_epoch && is_stake_account {
-            info!("First stake account in new epoch {} at slot {}", current_epoch, slot);
+            debug!("First stake account in new epoch {} at slot {}", current_epoch, slot);
             
             // Process validator set for the new epoch
             self.compute_and_store_epoch_validators(stored_epoch, slot);
@@ -298,33 +298,21 @@ impl GeyserPlugin for TwineGeyserPlugin {
             self.epoch_stake_accumulator.clear();
             
             // Process this stake account
-            match stake::deserialize_stake_state(account_change.new_account.data()) {
-                Ok(stake_state) => {
-                    let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
-                    self.epoch_stake_accumulator.insert(
-                        account_change.pubkey.to_string(),
-                        stake_info
-                    );
-                }
-                Err(e) => {
-                    debug!("Failed to deserialize stake account {}: {}", 
-                        account_change.pubkey, e);
-                }
+            if let Ok(stake_state) = stake::deserialize_stake_state(account_change.new_account.data()) {
+                let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                self.epoch_stake_accumulator.insert(
+                    account_change.pubkey.to_string(),
+                    stake_info
+                );
             }
         } else if is_stake_account && current_epoch == stored_epoch {
             // Continue accumulating stakes for current epoch
-            match stake::deserialize_stake_state(account_change.new_account.data()) {
-                Ok(stake_state) => {
-                    let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
-                    self.epoch_stake_accumulator.insert(
-                        account_change.pubkey.to_string(),
-                        stake_info
-                    );
-                }
-                Err(e) => {
-                    debug!("Failed to deserialize stake account {}: {}", 
-                        account_change.pubkey, e);
-                }
+            if let Ok(stake_state) = stake::deserialize_stake_state(account_change.new_account.data()) {
+                let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                self.epoch_stake_accumulator.insert(
+                    account_change.pubkey.to_string(),
+                    stake_info
+                );
             }
         }
 
@@ -378,24 +366,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
         delta_lthash: &LtHash,
         cumulative_lthash: &LtHash,
     ) -> PluginResult<()> {
-        info!(
-            "Received LtHash for slot {}: delta={:?}, cumulative={:?}",
-            slot,
-            delta_lthash
-                .0
-                .iter()
-                .take(2)
-                .map(|x| format!("{:016x}", x))
-                .collect::<Vec<_>>()
-                .join(""),
-            cumulative_lthash
-                .0
-                .iter()
-                .take(2)
-                .map(|x| format!("{:016x}", x))
-                .collect::<Vec<_>>()
-                .join("")
-        );
+        debug!("Received LtHash for slot {}", slot);
 
         // Convert LtHash to bytes
         let delta_bytes: Vec<u8> = delta_lthash
@@ -423,11 +394,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
         *slot_data.delta_lthash.write() = Some(delta_bytes);
         *slot_data.cumulative_lthash.write() = Some(cumulative_bytes);
         
-        info!("Updated airlock slot {} with LtHash data", slot);
+        debug!("Updated airlock slot {} with LtHash data", slot);
 
         // Check if we now have complete data and slot is rooted
         if slot_data.is_rooted() && slot_data.has_complete_data() {
-            info!("Slot {} has complete data after LtHash update, triggering write", slot);
+            debug!("Slot {} has complete data after LtHash update, triggering write", slot);
             self.try_write_complete_slot(slot)?;
         }
 
@@ -445,10 +416,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
     fn notify_bank_hash_components(&self, components: BankHashComponentsInfo) -> PluginResult<()> {
         let slot = components.slot;
 
-        info!(
-            "Received bank hash components for slot {}: bank_hash={}, parent_bank_hash={}, signature_count={}",
-            slot, components.bank_hash, components.parent_bank_hash, components.signature_count
-        );
+        debug!("Received bank hash components for slot {}", slot);
 
         // Get or create airlock slot data
         let slot_data = self
@@ -463,11 +431,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Update bank hash components
         *slot_data.bank_hash_components.write() = Some(components);
         
-        info!("Updated airlock slot {} with bank hash components", slot);
+        debug!("Updated airlock slot {} with bank hash components", slot);
 
         // Check if we now have complete data and slot is rooted
         if slot_data.is_rooted() && slot_data.has_complete_data() {
-            info!("Slot {} has complete data after bank hash update, triggering write", slot);
+            debug!("Slot {} has complete data after bank hash update, triggering write", slot);
             self.try_write_complete_slot(slot)?;
         }
 
@@ -509,10 +477,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
             ReplicaBlockInfoVersions::V0_0_2(_) => {}
             ReplicaBlockInfoVersions::V0_0_3(_) => {}
             ReplicaBlockInfoVersions::V0_0_4(info) => {
-                info!(
-                    "Block metadata V4 for slot {}: blockhash={}, parent_blockhash={}, parent_slot={}, executed_transaction_count={}, entry_count={}",
-                    info.slot, info.blockhash, info.parent_blockhash, info.parent_slot, info.executed_transaction_count, info.entry_count
-                );
+                debug!("Block metadata V4 for slot {}", info.slot);
 
                 // Increment block metadata counter
                 self.stats
@@ -535,11 +500,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 *slot_data.executed_transaction_count.write() = Some(info.executed_transaction_count);
                 *slot_data.entry_count.write() = Some(info.entry_count);
                 
-                info!("Updated airlock slot {} with block metadata", info.slot);
+                debug!("Updated airlock slot {} with block metadata", info.slot);
 
                 // Check if we now have complete data and slot is rooted
                 if slot_data.is_rooted() && slot_data.has_complete_data() {
-                    info!("Slot {} has complete data after block metadata update, triggering write", info.slot);
+                    debug!("Slot {} has complete data after block metadata update, triggering write", info.slot);
                     self.try_write_complete_slot(info.slot)?;
                 }
 
@@ -665,7 +630,7 @@ impl TwineGeyserPlugin {
             }
         }
 
-        info!(
+        debug!(
             "Recorded {} vote transaction for slot {} from validator {} (voting on slot {:?})",
             vote_details.vote_type, slot, vote_pubkey, vote_details.vote_slot
         );
@@ -847,7 +812,7 @@ impl TwineGeyserPlugin {
         let entry_count = slot_data.entry_count.read().clone();
         let vote_transactions = slot_data.vote_transactions.read().clone();
 
-        info!(
+        debug!(
             "Writing complete slot {} data to DB: bank_hash={}, lthash_len={}, votes={}, status={}",
             slot,
             components.bank_hash,
@@ -881,7 +846,7 @@ impl TwineGeyserPlugin {
 
         // Handle account changes - save ALL changes if any monitored account changed
         if slot_data.contains_monitored_change.load(Ordering::Acquire) {
-            info!("Monitored account change detected, saving ALL account changes for slot {}", slot);
+            debug!("Monitored account change detected, saving ALL account changes for slot {}", slot);
             
             let mut all_changes = Vec::new();
             while let Some(change) = slot_data.buffer.pop() {
@@ -905,7 +870,7 @@ impl TwineGeyserPlugin {
                 self.stats
                     .slots_with_monitored_accounts
                     .fetch_add(1, Ordering::Relaxed);
-                info!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
+                debug!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
             }
         } else {
             // No monitored changes - clear the buffer without saving
@@ -1596,7 +1561,7 @@ impl TwineGeyserPlugin {
             })
             .collect();
         
-        info!("Computed validator set for epoch {} with {} validators, total stake: {}", 
+        debug!("Computed validator set for epoch {} with {} validators, total stake: {}", 
             epoch, validators.len(), total_stake);
         
         // NOTE: In Solana, stakes are normally only valid for the NEXT epoch after they are activated.

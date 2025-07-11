@@ -143,7 +143,7 @@ impl AirlockSlotData {
             entry_count: parking_lot::RwLock::new(None),
             status: parking_lot::RwLock::new("created".to_string()),
             created_at: std::time::Instant::now(),
-            vote_transactions: parking_lot::RwLock::new(Vec::new()),
+            vote_transactions: parking_lot::RwLock::new(Vec::with_capacity(300)),
             memory_usage: AtomicUsize::new(0),
             rooted_at_slot: parking_lot::RwLock::new(None),
         }

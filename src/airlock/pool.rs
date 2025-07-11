@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use solana_sdk::pubkey::Pubkey;
 use std::sync::Arc;
 
-const POOL_SIZE: usize = 10000;
+const POOL_SIZE: usize = 100000;
 
 pub struct ObjectPool<T> {
     pool: ArrayQueue<T>,
