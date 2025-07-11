@@ -574,7 +574,8 @@ fn validate_lthash_transformation(
     details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
     
     // Apply all account changes: mix out old, mix in new
-    for change in account_changes {
+    let mut mismatch_count = 0;
+    for (idx, change) in account_changes.iter().enumerate() {
         // First, calculate the LtHash ourselves and verify it matches stored
         let pubkey = match Pubkey::from_str(&change.account_pubkey) {
             Ok(pk) => pk,
@@ -614,15 +615,20 @@ fn validate_lthash_transformation(
                 let new_matches = calculated_new_lt == stored_new_lt;
                 
                 if !old_matches || !new_matches {
+                    mismatch_count += 1;
                     details.push_str(&format!(
-                        "LtHash mismatch for account {}: old_matches={}, new_matches={}\n",
-                        &change.account_pubkey[..8], old_matches, new_matches
+                        "\n[{}] LtHash mismatch for account {} ({}): old_matches={}, new_matches={}\n",
+                        idx, &change.account_pubkey[..8], &change.account_pubkey, old_matches, new_matches
                     ));
                     if !old_matches {
                         details.push_str(&format!(
                             "  Old: calculated={}, stored={}\n",
                             &format_lthash(&calculated_old_lt)[..32],
                             &format_lthash(&stored_old_lt)[..32]
+                        ));
+                        details.push_str(&format!(
+                            "    Data len: {}, lamports: {}, owner: {}, executable: {}\n",
+                            change.old_data.len(), change.old_lamports, change.old_owner, change.old_executable
                         ));
                     }
                     if !new_matches {
@@ -631,7 +637,20 @@ fn validate_lthash_transformation(
                             &format_lthash(&calculated_new_lt)[..32],
                             &format_lthash(&stored_new_lt)[..32]
                         ));
+                        details.push_str(&format!(
+                            "    Data len: {}, lamports: {}, owner: {}, executable: {}\n",
+                            change.new_data.len(), change.new_lamports, change.new_owner, change.new_executable
+                        ));
                     }
+                    
+                    // Show cumulative state after this account
+                    let mut test_cumulative = calculated_cumulative.clone();
+                    test_cumulative.mix_out(&stored_old_lt);
+                    test_cumulative.mix_in(&stored_new_lt);
+                    details.push_str(&format!(
+                        "  Cumulative after this account: {}\n",
+                        &format_lthash(&test_cumulative)[..32]
+                    ));
                 }
                 
                 // Use the stored values for cumulative calculation
@@ -640,7 +659,7 @@ fn validate_lthash_transformation(
                 
                 if change.account_pubkey == target_pubkey {
                     details.push_str(&format!(
-                        "Monitored account {}: applied change (verified: old={}, new={})\n",
+                        "\nMonitored account {}: applied change (verified: old={}, new={})\n",
                         &change.account_pubkey[..8], old_matches, new_matches
                     ));
                 }
@@ -676,6 +695,11 @@ fn validate_lthash_transformation(
                 };
             }
         }
+    }
+    
+    // Add summary of mismatches
+    if mismatch_count > 0 {
+        details.push_str(&format!("\n\nSUMMARY: Found {} account LtHash mismatches out of {} total accounts\n", mismatch_count, account_changes.len()));
     }
     
     // Now check if our calculated cumulative matches the stored one
