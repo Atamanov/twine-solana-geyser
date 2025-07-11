@@ -396,30 +396,70 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
     let mut validations = Vec::new();
 
     for slot in slot_chain {
-        // Calculate bank hash from components
-        let mut hasher = Hasher::default();
+        // Calculate bank hash exactly as Solana does
+        let mut calculated_hash;
         
-        // Add parent bank hash
-        if let Ok(parent_hash) = Hash::from_str(&slot.parent_bank_hash) {
-            hasher.hash(parent_hash.as_ref());
-        }
+        // Parse the parent bank hash
+        let parent_hash = match Hash::from_str(&slot.parent_bank_hash) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("Failed to parse parent_bank_hash for slot {}: {}", slot.slot, e);
+                validations.push(BankHashValidation {
+                    slot: slot.slot,
+                    expected_hash: slot.bank_hash.clone(),
+                    calculated_hash: "Error".to_string(),
+                    valid: false,
+                });
+                continue;
+            }
+        };
+
+        // Step 1: Base hash with parent, signature count, and last blockhash
+        // We're in the post-LtHash world, so we use hashv with these components
+        let signature_count_bytes = slot.signature_count.to_le_bytes();
         
-        // Add accounts lthash checksum
-        if let Some(checksum) = &slot.accounts_lthash_checksum {
-            if let Ok(hash) = Hash::from_str(checksum) {
-                hasher.hash(hash.as_ref());
+        let last_blockhash = match Hash::from_str(&slot.last_blockhash) {
+            Ok(h) => h,
+            Err(e) => {
+                warn!("Failed to parse last_blockhash for slot {}: {}", slot.slot, e);
+                validations.push(BankHashValidation {
+                    slot: slot.slot,
+                    expected_hash: slot.bank_hash.clone(),
+                    calculated_hash: "Error".to_string(),
+                    valid: false,
+                });
+                continue;
+            }
+        };
+
+        // Since we're post-LtHash, we don't include accounts_delta_hash
+        // Base hash = hashv([parent_hash, signature_count, last_blockhash])
+        calculated_hash = solana_sdk::hash::hashv(&[
+            parent_hash.as_ref(),
+            &signature_count_bytes,
+            last_blockhash.as_ref(),
+        ]);
+
+        // Step 2: If we have LtHash checksum, add it
+        // This is mutually exclusive with epoch_accounts_hash
+        if let Some(checksum_str) = &slot.accounts_lthash_checksum {
+            if let Ok(checksum_hash) = Hash::from_str(checksum_str) {
+                // hash = hashv([previous_hash, lt_hash_checksum])
+                calculated_hash = solana_sdk::hash::hashv(&[
+                    calculated_hash.as_ref(),
+                    checksum_hash.as_ref(),
+                ]);
+            }
+        } else if let Some(epoch_hash_str) = &slot.epoch_accounts_hash {
+            // If no LtHash checksum but we have epoch accounts hash
+            if let Ok(epoch_hash) = Hash::from_str(epoch_hash_str) {
+                calculated_hash = solana_sdk::hash::hashv(&[
+                    calculated_hash.as_ref(),
+                    epoch_hash.as_ref(),
+                ]);
             }
         }
         
-        // Add signature count
-        hasher.hash(&slot.signature_count.to_le_bytes());
-        
-        // Add last blockhash
-        if let Ok(blockhash) = Hash::from_str(&slot.last_blockhash) {
-            hasher.hash(blockhash.as_ref());
-        }
-        
-        let calculated_hash = hasher.result();
         let valid = calculated_hash.to_string() == slot.bank_hash;
         
         if !valid {
@@ -428,8 +468,9 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
                 slot.slot, slot.bank_hash, calculated_hash
             );
             warn!(
-                "  Components: parent_bank_hash={}, accounts_delta_hash={:?}, accounts_lthash_checksum={:?}, signature_count={}, last_blockhash={}",
-                slot.parent_bank_hash, slot.accounts_delta_hash, slot.accounts_lthash_checksum, slot.signature_count, slot.last_blockhash
+                "  Components: parent_bank_hash={}, signature_count={}, last_blockhash={}, accounts_lthash_checksum={:?}, epoch_accounts_hash={:?}",
+                slot.parent_bank_hash, slot.signature_count, slot.last_blockhash, 
+                slot.accounts_lthash_checksum, slot.epoch_accounts_hash
             );
         }
 
