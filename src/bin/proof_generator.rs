@@ -302,7 +302,7 @@ async fn generate_proof_package(
             vote_slot: row.get::<_, Option<i64>>("vote_slot").map(|v| v as u64),
             vote_hash: row.get("vote_hash"),
             root_slot: row.get::<_, Option<i64>>("root_slot").map(|v| v as u64),
-            lockouts_count: row.get::<_, Option<i64>>("lockouts_count").map(|v| v as u64),
+            lockouts_count: row.get::<_, Option<i32>>("lockouts_count").map(|v| v as u64),
             timestamp: row.get("timestamp"),
         });
     }
