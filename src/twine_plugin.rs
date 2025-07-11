@@ -344,21 +344,24 @@ impl GeyserPlugin for TwineGeyserPlugin {
                          account_change.old_account.data().len();
         slot_data.memory_usage.fetch_add(memory_size, Ordering::Relaxed);
 
-        // Only buffer if this is a monitored account
-        if self.monitored_accounts.contains(&account_change.pubkey) {
+        // Check if this is a monitored account
+        let pubkey = account_change.pubkey;
+        let is_monitored = self.monitored_accounts.contains(&pubkey);
+        
+        // Always buffer ALL account changes (we need complete slot data for proofs)
+        slot_data.buffer.push(account_change);
+        
+        // Mark slot if it contains a monitored change
+        if is_monitored {
             slot_data
                 .contains_monitored_change
                 .store(true, Ordering::Release);
             self.pending_proofs_for_scheduling
-                .insert(account_change.pubkey, slot);
+                .insert(pubkey, slot);
             self.stats
                 .monitored_account_changes
                 .fetch_add(1, Ordering::Relaxed);
-            
-            // Buffer the account change
-            slot_data.buffer.push(account_change);
         }
-        // Note: We don't buffer stake accounts - we handle them separately via epoch_stake_accumulator
 
         // Update stats
         self.stats.total_updates.fetch_add(1, Ordering::Relaxed);
@@ -876,9 +879,9 @@ impl TwineGeyserPlugin {
 
         self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
 
-        // Handle monitored account changes if any
+        // Handle account changes - save ALL changes if any monitored account changed
         if slot_data.contains_monitored_change.load(Ordering::Acquire) {
-            info!("Monitored account change detected, saving account changes for slot {}", slot);
+            info!("Monitored account change detected, saving ALL account changes for slot {}", slot);
             
             let mut all_changes = Vec::new();
             while let Some(change) = slot_data.buffer.pop() {
@@ -887,6 +890,10 @@ impl TwineGeyserPlugin {
             
             if !all_changes.is_empty() {
                 let change_count = all_changes.len();
+                let monitored_count = all_changes.iter()
+                    .filter(|c| self.monitored_accounts.contains(&c.pubkey))
+                    .count();
+                    
                 queue
                     .send(DbWriteCommand::AccountChanges {
                         slot,
@@ -898,7 +905,7 @@ impl TwineGeyserPlugin {
                 self.stats
                     .slots_with_monitored_accounts
                     .fetch_add(1, Ordering::Relaxed);
-                info!("Saved {} account changes for slot {}", change_count, slot);
+                info!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
             }
         } else {
             // No monitored changes - clear the buffer without saving
