@@ -432,33 +432,40 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
             }
         };
 
-        // Since we're post-LtHash, we don't include accounts_delta_hash
-        // Base hash = hashv([parent_hash, signature_count, last_blockhash])
+        // Parse accounts lattice hash checksum - this should always be present in post-LtHash world
+        let checksum_hash = if let Some(checksum_str) = &slot.accounts_lthash_checksum {
+            match Hash::from_str(checksum_str) {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!("Failed to parse accounts_lthash_checksum for slot {}: {}", slot.slot, e);
+                    validations.push(BankHashValidation {
+                        slot: slot.slot,
+                        expected_hash: slot.bank_hash.clone(),
+                        calculated_hash: "Error".to_string(),
+                        valid: false,
+                    });
+                    continue;
+                }
+            }
+        } else {
+            warn!("Missing accounts_lthash_checksum for slot {}", slot.slot);
+            validations.push(BankHashValidation {
+                slot: slot.slot,
+                expected_hash: slot.bank_hash.clone(),
+                calculated_hash: "Error".to_string(),
+                valid: false,
+            });
+            continue;
+        };
+
+        // The correct order for bank hash is:
+        // hashv([parent_bank_hash, signature_count, last_blockhash, accounts_lthash_checksum])
         calculated_hash = solana_sdk::hash::hashv(&[
             parent_hash.as_ref(),
             &signature_count_bytes,
             last_blockhash.as_ref(),
+            checksum_hash.as_ref(),
         ]);
-
-        // Step 2: If we have LtHash checksum, add it
-        // This is mutually exclusive with epoch_accounts_hash
-        if let Some(checksum_str) = &slot.accounts_lthash_checksum {
-            if let Ok(checksum_hash) = Hash::from_str(checksum_str) {
-                // hash = hashv([previous_hash, lt_hash_checksum])
-                calculated_hash = solana_sdk::hash::hashv(&[
-                    calculated_hash.as_ref(),
-                    checksum_hash.as_ref(),
-                ]);
-            }
-        } else if let Some(epoch_hash_str) = &slot.epoch_accounts_hash {
-            // If no LtHash checksum but we have epoch accounts hash
-            if let Ok(epoch_hash) = Hash::from_str(epoch_hash_str) {
-                calculated_hash = solana_sdk::hash::hashv(&[
-                    calculated_hash.as_ref(),
-                    epoch_hash.as_ref(),
-                ]);
-            }
-        }
         
         let valid = calculated_hash.to_string() == slot.bank_hash;
         
