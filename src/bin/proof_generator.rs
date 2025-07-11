@@ -277,7 +277,7 @@ async fn generate_proof_package(
             new_lamports, new_owner, new_executable, new_rent_epoch, new_data, new_lthash
         FROM account_changes
         WHERE slot = $1
-        ORDER BY account_pubkey, write_version
+        ORDER BY write_version
     "#;
 
     let rows = client.query(changes_query, &[&(end_slot as i64)]).await?;
@@ -588,9 +588,13 @@ fn validate_lthash_transformation(
             }
         };
         
+        // Handle potential negative lamports by treating them as 0
+        let old_lamports = if change.old_lamports < 0 { 0 } else { change.old_lamports as u64 };
+        let new_lamports = if change.new_lamports < 0 { 0 } else { change.new_lamports as u64 };
+        
         // Calculate old account LtHash
         let calculated_old_lt = calculate_account_lthash(
-            change.old_lamports as u64,
+            old_lamports,
             change.old_rent_epoch as u64,
             &change.old_data,
             change.old_executable,
@@ -600,7 +604,7 @@ fn validate_lthash_transformation(
         
         // Calculate new account LtHash
         let calculated_new_lt = calculate_account_lthash(
-            change.new_lamports as u64,
+            new_lamports,
             change.new_rent_epoch as u64,
             &change.new_data,
             change.new_executable,
@@ -627,8 +631,8 @@ fn validate_lthash_transformation(
                             &format_lthash(&stored_old_lt)[..32]
                         ));
                         details.push_str(&format!(
-                            "    Data len: {}, lamports: {}, owner: {}, executable: {}\n",
-                            change.old_data.len(), change.old_lamports, change.old_owner, change.old_executable
+                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}\n",
+                            change.old_data.len(), old_lamports, change.old_lamports, change.old_owner, change.old_executable, change.old_rent_epoch
                         ));
                     }
                     if !new_matches {
@@ -638,8 +642,8 @@ fn validate_lthash_transformation(
                             &format_lthash(&stored_new_lt)[..32]
                         ));
                         details.push_str(&format!(
-                            "    Data len: {}, lamports: {}, owner: {}, executable: {}\n",
-                            change.new_data.len(), change.new_lamports, change.new_owner, change.new_executable
+                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}\n",
+                            change.new_data.len(), new_lamports, change.new_lamports, change.new_owner, change.new_executable, change.new_rent_epoch
                         ));
                     }
                     
