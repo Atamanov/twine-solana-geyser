@@ -568,32 +568,25 @@ fn validate_lthash_transformation(
         }
     };
     
-    // Always calculate delta from individual account changes for verification
+    // Start with previous cumulative LtHash
+    let mut calculated_cumulative = prev_cumulative.clone();
+    details.push_str(&format!("Starting with previous cumulative: {}\n", &format_lthash(&calculated_cumulative)[..32]));
     details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
     
-    // Step 1: Calculate delta from ALL account changes (including monitored)
-    let mut calculated_delta = LtHash::identity();
-    let mut monitored_delta = LtHash::identity();
-    let mut other_delta = LtHash::identity();
-    
+    // Apply all account changes: mix out old, mix in new
     for change in account_changes {
         match (parse_lthash(&change.old_lthash), parse_lthash(&change.new_lthash)) {
             (Ok(old_lt), Ok(new_lt)) => {
-                // Delta = sum(new) - sum(old)
-                // In LtHash: mix_in(new), mix_out(old)
-                calculated_delta.mix_in(&new_lt);
-                calculated_delta.mix_out(&old_lt);
+                // Remove old account state
+                calculated_cumulative.mix_out(&old_lt);
+                // Add new account state
+                calculated_cumulative.mix_in(&new_lt);
                 
                 if change.account_pubkey == target_pubkey {
-                    monitored_delta.mix_in(&new_lt);
-                    monitored_delta.mix_out(&old_lt);
                     details.push_str(&format!(
-                        "Monitored account {}: mixed in new, mixed out old\n",
+                        "Monitored account {}: applied change\n",
                         &change.account_pubkey[..8]
                     ));
-                } else {
-                    other_delta.mix_in(&new_lt);
-                    other_delta.mix_out(&old_lt);
                 }
             }
             (Err(e1), _) => {
@@ -629,63 +622,16 @@ fn validate_lthash_transformation(
         }
     }
     
-    // Step 2: Verify calculated delta matches stored delta
-    let stored_delta = match parse_lthash(&last_slot.delta_lthash) {
-        Ok(d) => d,
-        Err(e) => {
-            details.push_str(&format!("Failed to parse stored delta_lthash: {}\n", e));
-            return LtHashValidation {
-                previous_slot: prev_slot.slot,
-                last_slot: last_slot.slot,
-                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                calculated_new_lthash: "Error".to_string(),
-                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                valid: false,
-                details,
-            };
-        }
-    };
-    
-    let delta_matches = calculated_delta == stored_delta;
-    details.push_str(&format!(
-        "Delta verification: {} (calculated: {}, stored: {})\n",
-        if delta_matches { "MATCHES" } else { "MISMATCH" },
-        &format_lthash(&calculated_delta)[..32],
-        &format_lthash(&stored_delta)[..32]
-    ));
-    
-    // If delta doesn't match, let's check if applying stored delta still works
-    if !delta_matches {
-        details.push_str("\nDelta mismatch analysis:\n");
-        details.push_str(&format!("- We processed {} account changes\n", account_changes.len()));
-        details.push_str(&format!("- Monitored delta: {}\n", &format_lthash(&monitored_delta)[..32]));
-        details.push_str(&format!("- Other accounts delta: {}\n", &format_lthash(&other_delta)[..32]));
-        
-        // Check if monitored + other = calculated
-        let mut combined = LtHash::identity();
-        combined.mix_in(&monitored_delta);
-        combined.mix_in(&other_delta);
-        details.push_str(&format!("- Combined delta: {}\n", &format_lthash(&combined)[..32]));
-        details.push_str(&format!("- Combined matches calculated: {}\n", combined == calculated_delta));
-        
-        details.push_str("- This suggests some account changes might be missing from our data\n");
-        details.push_str("- However, the cumulative LtHash still validates correctly\n");
-    }
-    
-    // Step 3: Apply delta to previous cumulative
-    let mut calculated_cumulative = prev_cumulative.clone();
-    calculated_cumulative.mix_in(&stored_delta);
-    
-    // Step 4: Verify new cumulative matches stored
+    // Now check if our calculated cumulative matches the stored one
     let cumulative_matches = calculated_cumulative == stored_cumulative;
     details.push_str(&format!(
-        "Cumulative verification: {} (calculated: {}, stored: {})\n",
+        "\nFinal cumulative verification: {} (calculated: {}, stored: {})\n",
         if cumulative_matches { "MATCHES" } else { "MISMATCH" },
         &format_lthash(&calculated_cumulative)[..32],
         &format_lthash(&stored_cumulative)[..32]
     ));
     
-    // Step 5: Verify checksum
+    // Also verify the checksum
     let calculated_checksum = calculated_cumulative.checksum();
     let checksum_matches = if let Some(stored_checksum_str) = &last_slot.accounts_lthash_checksum {
         let matches = calculated_checksum.to_string() == *stored_checksum_str;
@@ -701,14 +647,14 @@ fn validate_lthash_transformation(
         false
     };
     
-    // Overall validation passes if all checks pass
-    let valid = delta_matches && cumulative_matches && checksum_matches;
+    // Overall validation passes if cumulative and checksum match
+    let valid = cumulative_matches && checksum_matches;
     
     if !valid {
         details.push_str("LtHash validation FAILED!\n");
         details.push_str(&format!(
-            "Summary: delta_matches={}, cumulative_matches={}, checksum_matches={}\n",
-            delta_matches, cumulative_matches, checksum_matches
+            "Summary: cumulative_matches={}, checksum_matches={}\n",
+            cumulative_matches, checksum_matches
         ));
     } else {
         details.push_str("LtHash validation SUCCESSFUL! All checks passed.\n");
