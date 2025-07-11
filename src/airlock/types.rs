@@ -94,6 +94,7 @@ pub struct AirlockSlotData {
     /// Tracks how many validator threads are currently writing to this slot's buffer
     pub writer_count: AtomicU32,
     /// Per-thread buffers to eliminate contention - indexed by thread ID
+    /// Using a fixed-size array would be better but ThreadId is opaque
     pub thread_buffers: DashMap<std::thread::ThreadId, Vec<OwnedAccountChange>>,
     /// Tracks if a monitored account was seen in this slot
     pub contains_monitored_change: AtomicBool,
@@ -133,7 +134,7 @@ impl AirlockSlotData {
     pub fn new() -> Self {
         Self {
             writer_count: AtomicU32::new(0),
-            thread_buffers: DashMap::new(),
+            thread_buffers: DashMap::with_capacity(32), // Pre-size for typical thread count
             contains_monitored_change: AtomicBool::new(false),
             bank_hash_components: parking_lot::RwLock::new(None),
             delta_lthash: parking_lot::RwLock::new(None),

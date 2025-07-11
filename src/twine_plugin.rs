@@ -23,11 +23,16 @@ use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
+use std::cell::RefCell;
 
 use crate::chain_monitor::ChainMonitor;
 use crate::metrics_server::MetricsServer;
 use crate::worker_pool::WorkerPool;
 use crate::api_server::ApiServerHandle;
+
+thread_local! {
+    static SLOT_CACHE: RefCell<HashMap<u64, Arc<AirlockSlotData>>> = RefCell::new(HashMap::with_capacity(16));
+}
 
 #[derive(Debug)]
 struct VoteDetails {
@@ -48,7 +53,6 @@ pub struct TwineGeyserPlugin {
     monitored_accounts: Arc<DashSet<Pubkey>>,
     /// Debouncing map for proof scheduling
     pending_proofs_for_scheduling: Arc<DashMap<Pubkey, u64>>,
-    /// Cache for whether we have any monitored accounts
     has_monitored_accounts: Arc<AtomicBool>,
     /// Queue feeding the database worker pool
     db_writer_queue: Option<Sender<DbWriteCommand>>,
@@ -75,7 +79,7 @@ pub struct TwineGeyserPlugin {
     /// Current epoch
     current_epoch: Arc<AtomicU64>,
     /// Accumulates stake states during epoch transitions
-    epoch_stake_accumulator: Arc<DashMap<String, StakeAccountInfo>>,
+    epoch_stake_accumulator: Arc<DashMap<Pubkey, StakeAccountInfo>>,
     /// Queue for delayed cleanup of processed slots
     cleanup_queue: Arc<Mutex<VecDeque<(u64, Instant)>>>,
     /// Handle for cleanup task
@@ -305,8 +309,9 @@ impl GeyserPlugin for TwineGeyserPlugin {
             // Process this stake account
             if let Ok(stake_state) = stake::deserialize_stake_state(account_change.new_account.data()) {
                 let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                // Use pubkey directly as key to avoid string allocation
                 self.epoch_stake_accumulator.insert(
-                    account_change.pubkey.to_string(),
+                    account_change.pubkey,
                     stake_info
                 );
             }
@@ -314,24 +319,39 @@ impl GeyserPlugin for TwineGeyserPlugin {
             // Continue accumulating stakes for current epoch
             if let Ok(stake_state) = stake::deserialize_stake_state(account_change.new_account.data()) {
                 let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                // Use pubkey directly as key to avoid string allocation
                 self.epoch_stake_accumulator.insert(
-                    account_change.pubkey.to_string(),
+                    account_change.pubkey,
                     stake_info
                 );
             }
         }
 
-        // Try to get existing slot data first to avoid lock contention
-        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
-            existing.clone()
-        } else {
-            self.airlock
-                .entry(slot)
-                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-                .clone()
-        };
+        let slot_data = SLOT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            
+            // periodic cleanup
+            if cache.len() > 32 {
+                cache.clear(); // threads work on ~3 slots concurrently
+            }
+            
+            if let Some(cached) = cache.get(&slot) {
+                cached.clone()
+            } else {
+                let data = if let Some(existing) = self.airlock.get(&slot) {
+                    existing.clone()
+                } else {
+                    self.airlock
+                        .entry(slot)
+                        .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                        .clone()
+                };
+                cache.insert(slot, data.clone());
+                data
+            }
+        });
 
-        // Atomically increment writer count
+        // track active writers
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
         // Quick check: if no monitored accounts at all, skip expensive lookup
@@ -339,9 +359,10 @@ impl GeyserPlugin for TwineGeyserPlugin {
             // Still need to buffer the change
             let thread_id = std::thread::current().id();
             slot_data.thread_buffers.entry(thread_id)
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| Vec::with_capacity(1000))
                 .push(account_change);
-            slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+            // Atomically decrement writer count
+        slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
             return Ok(());
         }
         
@@ -351,11 +372,10 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         // Get or create thread-local buffer for this slot
         let thread_id = std::thread::current().id();
-        let mut thread_buffer = slot_data.thread_buffers.entry(thread_id)
-            .or_insert_with(Vec::new);
-        thread_buffer.push(account_change);
+        slot_data.thread_buffers.entry(thread_id)
+            .or_insert_with(|| Vec::with_capacity(1000)) // mainnet slots can have 50k+ updates
+            .push(account_change);
         
-        // Mark slot if it contains a monitored change
         if is_monitored {
             slot_data
                 .contains_monitored_change
@@ -403,7 +423,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 .clone()
         };
 
-        // Atomically increment writer count while we update
+        // track active writers while we update
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
         // Update LtHash data
@@ -437,7 +457,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 .clone()
         };
 
-        // Atomically increment writer count while we update
+        // track active writers while we update
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
         // Update bank hash components
@@ -496,7 +516,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
                     .or_insert_with(|| Arc::new(AirlockSlotData::new()))
                     .clone();
 
-                // Atomically increment writer count while we update
+                // track active writers while we update
                 slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
                 // Update block metadata
@@ -509,8 +529,8 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
                 // Skip immediate write attempt - let rooted handler do it
 
-                // Atomically decrement writer count
-                slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+                        // Atomically decrement writer count
+        slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
 
                 // Update stats
                 self.stats
@@ -768,7 +788,7 @@ impl TwineGeyserPlugin {
                 // Drop the reference to avoid holding lock
                 drop(slot_data_ref);
                 
-                // Wait for all writers to finish
+                // spin until writers complete
                 while slot_data_clone.writer_count.load(Ordering::Acquire) > 0 {
                     std::hint::spin_loop();
                 }
@@ -879,7 +899,7 @@ impl TwineGeyserPlugin {
                 debug!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
             }
         } else {
-            // No monitored changes - clear all thread buffers
+            // discard unmonitored data
             let mut discarded_count = 0;
             for mut entry in slot_data.thread_buffers.iter_mut() {
                 discarded_count += entry.value().len();
@@ -1528,14 +1548,17 @@ impl TwineGeyserPlugin {
     
     fn compute_and_store_epoch_validators(&self, epoch: u64, computed_at_slot: u64) {
         // Aggregate stakes by validator from accumulated stake accounts
-        let mut validator_stakes: HashMap<String, u64> = HashMap::new();
+        let mut validator_stakes: HashMap<String, u64> = HashMap::with_capacity(1000);
         
         for entry in self.epoch_stake_accumulator.iter() {
             let stake_info = entry.value();
             if let Some(voter_pubkey) = &stake_info.voter_pubkey {
                 // Only count active stakes (not deactivating)
                 if stake_info.deactivation_epoch.is_none() && stake_info.stake_amount > 0 {
-                    *validator_stakes.entry(voter_pubkey.clone()).or_insert(0) += stake_info.stake_amount;
+                        match validator_stakes.get_mut(voter_pubkey) {
+                        Some(stake) => *stake += stake_info.stake_amount,
+                        None => { validator_stakes.insert(voter_pubkey.clone(), stake_info.stake_amount); }
+                    }
                 }
             }
         }
