@@ -74,8 +74,7 @@ impl PooledAccountInfo {
                 self.inner.executable = account_info.executable;
                 self.inner.rent_epoch = account_info.rent_epoch;
                 self.inner.write_version = account_info.write_version;
-                self.inner.txn_signature =
-                    None; // V3 doesn't have txn_signature
+                self.inner.txn_signature = None; // V3 doesn't have txn_signature
 
                 self.inner.data.clear();
                 self.inner.data.extend_from_slice(account_info.data);
@@ -92,7 +91,7 @@ impl Drop for PooledAccountInfo {
     fn drop(&mut self) {
         let mut recycled = self.inner.clone();
         recycled.data.clear();
-        recycled.data.shrink_to(1024);
+        //recycled.data.shrink_to(1024);
         self.pool.put(recycled);
     }
 }
