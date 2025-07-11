@@ -1,0 +1,297 @@
+{
+  "panels": [
+    {
+      "title": "Monitored Account Change Statistics",
+      "type": "table",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH recent_stats AS (\n  SELECT \n    acs.account_pubkey,\n    acs.slot,\n    acs.old_data_size,\n    acs.new_data_size,\n    acs.old_data_size - acs.new_data_size as data_size_change,\n    acs.other_accounts_count,\n    acs.other_accounts_old_bytes + acs.other_accounts_new_bytes as other_accounts_total_bytes,\n    acs.created_at,\n    s.rooted_at\n  FROM account_change_stats acs\n  JOIN slots s ON acs.slot = s.slot\n  WHERE acs.is_monitored = true\n  AND acs.created_at > NOW() - INTERVAL '6 hours'\n  ORDER BY acs.slot DESC\n  LIMIT 100\n)\nSELECT \n  account_pubkey as \"Account\",\n  slot as \"Slot\",\n  old_data_size as \"Old Size (bytes)\",\n  new_data_size as \"New Size (bytes)\",\n  data_size_change as \"Size Change\",\n  other_accounts_count as \"Other Accounts\",\n  other_accounts_total_bytes as \"Other Accounts Bytes\",\n  TO_CHAR(created_at, 'HH24:MI:SS') as \"Time\"\nFROM recent_stats",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Monitored Account Activity Summary",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  COUNT(DISTINCT account_pubkey) as monitored_accounts_active\nFROM account_change_stats\nWHERE is_monitored = true\nAND created_at > NOW() - INTERVAL '1 hour'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Total Data Stored (Last Hour)",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  SUM(old_data_size + new_data_size + other_accounts_old_bytes + other_accounts_new_bytes) as total_bytes\nFROM account_change_stats\nWHERE is_monitored = true\nAND created_at > NOW() - INTERVAL '1 hour'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Other Accounts Per Slot (Avg)",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  ROUND(AVG(other_accounts_count), 1) as avg_other_accounts\nFROM account_change_stats\nWHERE is_monitored = true\nAND created_at > NOW() - INTERVAL '1 hour'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 1,
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Slots with Monitored Changes",
+      "type": "stat",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 12
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  COUNT(DISTINCT slot) as slots_with_changes\nFROM account_change_stats\nWHERE is_monitored = true\nAND created_at > NOW() - INTERVAL '1 hour'",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Account Size Changes Over Time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "postgres",
+        "uid": "$timescaledb"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "postgres",
+            "uid": "$timescaledb"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT \n  created_at as time,\n  account_pubkey,\n  new_data_size as value\nFROM account_change_stats\nWHERE is_monitored = true\nAND created_at > NOW() - INTERVAL '6 hours'\nORDER BY created_at",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "displayName": "${__field.labels.account_pubkey}",
+          "custom": {
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "spanNulls": 3600000,
+            "showPoints": "never"
+          }
+        }
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    }
+  ]
+}

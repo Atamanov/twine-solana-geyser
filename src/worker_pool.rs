@@ -444,11 +444,40 @@ async fn process_account_changes_batch(
     let mut count = 0;
 
     for cmd in changes {
-        if let DbWriteCommand::AccountChanges { slot, changes } = cmd {
+        if let DbWriteCommand::AccountChanges { slot, changes, monitored_pubkeys } = cmd {
+            // Convert monitored pubkeys to string set for fast lookup
+            let monitored_set: std::collections::HashSet<String> = monitored_pubkeys
+                .iter()
+                .map(|pk| pk.to_string())
+                .collect();
+            
+            // Track statistics for monitored accounts
+            let mut monitored_stats: std::collections::HashMap<String, (i64, i64, i64)> = std::collections::HashMap::new();
+            let other_count = changes.iter()
+                .filter(|c| !monitored_set.contains(&c.pubkey.to_string()))
+                .count() as i64;
+            let mut other_old_bytes = 0i64;
+            let mut other_new_bytes = 0i64;
+            
+            // Process all account changes
             for change in changes {
                 let old_data_size = change.old_account.data().len() as i64;
                 let new_data_size = change.new_account.data().len() as i64;
                 let total_data_size = old_data_size + new_data_size;
+                let is_monitored = monitored_set.contains(&change.pubkey.to_string());
+                
+                if is_monitored {
+                    // Track stats for monitored accounts
+                    let entry = monitored_stats.entry(change.pubkey.to_string())
+                        .or_insert((0, 0, 0));
+                    entry.0 += old_data_size;
+                    entry.1 += new_data_size;
+                    entry.2 += 1; // count
+                } else {
+                    // Accumulate stats for other accounts
+                    other_old_bytes += old_data_size;
+                    other_new_bytes += new_data_size;
+                }
                 
                 // Insert account change
                 let query = r#"
@@ -483,39 +512,57 @@ async fn process_account_changes_batch(
                     )
                     .await?;
                 
-                // Update monitored account tracking
-                let update_query = r#"
-                    UPDATE monitored_accounts 
-                    SET last_seen_slot = $1, 
-                        last_seen_at = NOW(), 
-                        total_changes_tracked = total_changes_tracked + 1,
-                        total_data_bytes = total_data_bytes + $2
-                    WHERE account_pubkey = $3
-                "#;
-                
-                client.execute(
-                    update_query,
-                    &[&(*slot as i64), &total_data_size, &change.pubkey.to_string()]
-                ).await?;
-                
-                // Insert account change stats
+                // Only update monitored account tracking if this is a monitored account
+                if is_monitored {
+                    let update_query = r#"
+                        UPDATE monitored_accounts 
+                        SET last_seen_slot = $1, 
+                            last_seen_at = NOW(), 
+                            total_changes_tracked = total_changes_tracked + 1,
+                            total_data_bytes = total_data_bytes + $2
+                        WHERE account_pubkey = $3
+                    "#;
+                    
+                    client.execute(
+                        update_query,
+                        &[&(*slot as i64), &total_data_size, &change.pubkey.to_string()]
+                    ).await?;
+                }
+
+                count += 1;
+            }
+            
+            // Now insert aggregated stats for monitored accounts
+            for (pubkey, (old_bytes, new_bytes, _count)) in monitored_stats {
                 let stats_query = r#"
                     INSERT INTO account_change_stats (
-                        account_pubkey, slot, change_count, old_data_size, new_data_size, total_data_size
-                    ) VALUES ($1, $2, 1, $3, $4, $5)
+                        account_pubkey, slot, change_count, old_data_size, new_data_size, total_data_size,
+                        other_accounts_count, other_accounts_old_bytes, other_accounts_new_bytes, is_monitored
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true)
                     ON CONFLICT (account_pubkey, slot) DO UPDATE
-                    SET change_count = account_change_stats.change_count + 1,
+                    SET change_count = account_change_stats.change_count + EXCLUDED.change_count,
                         old_data_size = account_change_stats.old_data_size + EXCLUDED.old_data_size,
                         new_data_size = account_change_stats.new_data_size + EXCLUDED.new_data_size,
-                        total_data_size = account_change_stats.total_data_size + EXCLUDED.total_data_size
+                        total_data_size = account_change_stats.total_data_size + EXCLUDED.total_data_size,
+                        other_accounts_count = EXCLUDED.other_accounts_count,
+                        other_accounts_old_bytes = EXCLUDED.other_accounts_old_bytes,
+                        other_accounts_new_bytes = EXCLUDED.other_accounts_new_bytes
                 "#;
                 
                 client.execute(
                     stats_query,
-                    &[&change.pubkey.to_string(), &(*slot as i64), &old_data_size, &new_data_size, &total_data_size]
+                    &[
+                        &pubkey, 
+                        &(*slot as i64), 
+                        &1i32,  // change_count
+                        &old_bytes, 
+                        &new_bytes, 
+                        &(old_bytes + new_bytes),
+                        &other_count,
+                        &other_old_bytes,
+                        &other_new_bytes
+                    ]
                 ).await?;
-
-                count += 1;
             }
         }
     }

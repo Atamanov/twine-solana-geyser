@@ -308,6 +308,7 @@ pub enum DbWriteCommand {
     AccountChanges {
         slot: u64,
         changes: Vec<OwnedAccountChange>,
+        monitored_pubkeys: Vec<Pubkey>,  // List of monitored account pubkeys
     },
     ProofRequests {
         requests: Vec<ProofRequest>,

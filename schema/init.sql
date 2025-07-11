@@ -257,6 +257,10 @@ CREATE TABLE IF NOT EXISTS account_change_stats (
     old_data_size BIGINT NOT NULL,
     new_data_size BIGINT NOT NULL,
     total_data_size BIGINT NOT NULL,
+    other_accounts_count INTEGER DEFAULT 0,
+    other_accounts_old_bytes BIGINT DEFAULT 0,
+    other_accounts_new_bytes BIGINT DEFAULT 0,
+    is_monitored BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (account_pubkey, slot)
 );
@@ -272,6 +276,74 @@ SELECT create_hypertable('account_change_stats', 'created_at',
 
 -- Set up retention policy for 7 days on account change stats
 SELECT add_retention_policy('account_change_stats', INTERVAL '7 days');
+
+-- Create index for monitored accounts
+CREATE INDEX IF NOT EXISTS idx_account_change_stats_monitored 
+ON account_change_stats(is_monitored, slot DESC) 
+WHERE is_monitored = TRUE;
+
+-- Create view for monitored account statistics
+CREATE OR REPLACE VIEW monitored_account_stats AS
+WITH recent_changes AS (
+    SELECT 
+        acs.account_pubkey,
+        acs.slot,
+        acs.old_data_size,
+        acs.new_data_size,
+        acs.old_data_size + acs.new_data_size as total_bytes,
+        acs.other_accounts_count,
+        acs.other_accounts_old_bytes + acs.other_accounts_new_bytes as other_accounts_total_bytes,
+        acs.created_at,
+        s.rooted_at,
+        ma.metadata
+    FROM account_change_stats acs
+    JOIN slots s ON acs.slot = s.slot
+    LEFT JOIN monitored_accounts ma ON acs.account_pubkey = ma.account_pubkey
+    WHERE acs.is_monitored = TRUE
+    AND acs.created_at > NOW() - INTERVAL '24 hours'
+    ORDER BY acs.slot DESC
+),
+account_summary AS (
+    SELECT 
+        account_pubkey,
+        COUNT(DISTINCT slot) as slots_changed,
+        MAX(slot) as last_changed_slot,
+        SUM(old_data_size) as total_old_bytes,
+        SUM(new_data_size) as total_new_bytes,
+        SUM(other_accounts_count) as total_other_accounts,
+        SUM(other_accounts_old_bytes + other_accounts_new_bytes) as total_other_bytes,
+        MAX(created_at) as last_change_time
+    FROM recent_changes
+    GROUP BY account_pubkey
+)
+SELECT 
+    rc.*,
+    asumm.slots_changed as account_total_slots_changed,
+    asumm.total_old_bytes as account_total_old_bytes,
+    asumm.total_new_bytes as account_total_new_bytes
+FROM recent_changes rc
+JOIN account_summary asumm ON rc.account_pubkey = asumm.account_pubkey
+ORDER BY rc.slot DESC;
+
+-- Create view for slot-level statistics when monitored accounts changed
+CREATE OR REPLACE VIEW slot_account_change_summary AS
+SELECT 
+    acs.slot,
+    COUNT(CASE WHEN acs.is_monitored THEN 1 END) as monitored_accounts_changed,
+    COUNT(CASE WHEN NOT acs.is_monitored THEN 1 END) as other_accounts_changed,
+    SUM(CASE WHEN acs.is_monitored THEN acs.old_data_size ELSE 0 END) as monitored_old_bytes,
+    SUM(CASE WHEN acs.is_monitored THEN acs.new_data_size ELSE 0 END) as monitored_new_bytes,
+    SUM(CASE WHEN NOT acs.is_monitored THEN acs.old_data_size ELSE 0 END) as other_old_bytes,
+    SUM(CASE WHEN NOT acs.is_monitored THEN acs.new_data_size ELSE 0 END) as other_new_bytes,
+    SUM(acs.old_data_size + acs.new_data_size) as total_bytes_stored,
+    MAX(acs.created_at) as created_at
+FROM account_change_stats acs
+WHERE EXISTS (
+    SELECT 1 FROM account_change_stats acs2 
+    WHERE acs2.slot = acs.slot AND acs2.is_monitored = TRUE
+)
+GROUP BY acs.slot
+ORDER BY acs.slot DESC;
 
 -- Create table for vote transactions
 CREATE TABLE IF NOT EXISTS vote_transactions (

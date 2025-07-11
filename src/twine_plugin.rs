@@ -894,10 +894,16 @@ impl TwineGeyserPlugin {
                     .filter(|c| self.monitored_accounts.contains(&c.pubkey))
                     .count();
                     
+                // Get list of monitored pubkeys
+                let monitored_pubkeys: Vec<Pubkey> = self.monitored_accounts.iter()
+                    .map(|entry| *entry.key())
+                    .collect();
+                    
                 queue
                     .send(DbWriteCommand::AccountChanges {
                         slot,
                         changes: all_changes,
+                        monitored_pubkeys,
                     })
                     .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
                 
