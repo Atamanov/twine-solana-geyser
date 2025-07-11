@@ -180,6 +180,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         proof_package.validation_results.vote_signature_validation.iter().filter(|v| v.valid).count(),
         proof_package.validation_results.vote_signature_validation.len()
     );
+    
+    // Print LtHash validation details if it failed
+    if !proof_package.validation_results.lthash_validation.valid {
+        println!("\n=== LtHash Validation Details ===");
+        println!("{}", proof_package.validation_results.lthash_validation.details);
+        println!("=================================");
+    }
+    
+    // Print vote signature errors if any
+    let failed_votes: Vec<_> = proof_package.validation_results.vote_signature_validation
+        .iter()
+        .filter(|v| !v.valid)
+        .collect();
+    if !failed_votes.is_empty() {
+        println!("\n=== Failed Vote Signatures ===");
+        for vote in failed_votes {
+            println!("Slot {}, Voter {}: {}", 
+                vote.slot, 
+                vote.voter_pubkey,
+                vote.error.as_ref().unwrap_or(&"Unknown error".to_string())
+            );
+        }
+        println!("==============================");
+    }
+    
     println!("\nProof package saved to: {}", args.output);
 
     Ok(())
