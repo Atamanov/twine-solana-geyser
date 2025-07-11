@@ -1,7 +1,7 @@
 use crate::airlock::types::{
     AirlockSlotData, BankHashComponentsInfo, DbWriteCommand, LtHash, OwnedAccountChange,
     PluginConfig, ProofRequest, ReplicaBlockInfoVersions, VoteTransaction,
-    StakeAccountInfo as DbStakeAccountInfo, EpochValidator,
+    EpochValidator,
 };
 use crate::airlock::{AirlockStats, AirlockStatsSnapshot};
 use crate::stake::{self, StakeAccountInfo, slot_to_epoch, get_epoch_boundaries};
@@ -18,15 +18,26 @@ use solana_sdk::account::ReadableAccount;
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_status::TransactionStatusMeta;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::time::Instant;
 
 use crate::chain_monitor::ChainMonitor;
 use crate::metrics_server::MetricsServer;
 use crate::worker_pool::WorkerPool;
 use crate::api_server::ApiServerHandle;
+
+#[derive(Debug)]
+struct VoteDetails {
+    vote_type: String,
+    vote_slot: Option<u64>,
+    vote_hash: Option<String>,
+    root_slot: Option<u64>,
+    lockouts_count: Option<u64>,
+    timestamp: Option<i64>,
+}
 
 /// Main plugin state
 #[derive(Debug)]
@@ -61,10 +72,12 @@ pub struct TwineGeyserPlugin {
     chain_monitor: Option<Arc<ChainMonitor>>,
     /// Current epoch
     current_epoch: Arc<AtomicU64>,
-    /// Tracks if we've seen the first account change in a new epoch
-    epoch_first_change_seen: Arc<AtomicBool>,
     /// Accumulates stake states during epoch transitions
     epoch_stake_accumulator: Arc<DashMap<String, StakeAccountInfo>>,
+    /// Queue for delayed cleanup of processed slots
+    cleanup_queue: Arc<Mutex<VecDeque<(u64, Instant)>>>,
+    /// Handle for cleanup task
+    cleanup_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Default for TwineGeyserPlugin {
@@ -85,8 +98,9 @@ impl Default for TwineGeyserPlugin {
             api_server: None,
             chain_monitor: None,
             current_epoch: Arc::new(AtomicU64::new(0)),
-            epoch_first_change_seen: Arc::new(AtomicBool::new(false)),
             epoch_stake_accumulator: Arc::new(DashMap::new()),
+            cleanup_queue: Arc::new(Mutex::new(VecDeque::new())),
+            cleanup_task: None,
         }
     }
 }
@@ -208,6 +222,10 @@ impl GeyserPlugin for TwineGeyserPlugin {
         info!("Starting metrics server");
         self.start_metrics_server();
         
+        // Start cleanup task
+        info!("Starting cleanup task");
+        self.start_cleanup_task();
+        
         // Start API server if configured
         if self.config.as_ref().and_then(|c| c.api_port).is_some() {
             info!("Starting API server");
@@ -236,6 +254,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
             handle.abort();
         }
         
+        // Stop cleanup task
+        if let Some(handle) = self.cleanup_task.take() {
+            handle.abort();
+        }
+        
         // Stop API server
         if let Some(handle) = self.api_server.take() {
             handle.shutdown();
@@ -255,6 +278,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
     }
 
     fn notify_account_change(&self, account_change: OwnedAccountChange) -> PluginResult<()> {
+        info!("Received account change for slot {}, ", account_change.slot);
         let slot = account_change.slot;
         let current_epoch = slot_to_epoch(slot);
         let stored_epoch = self.current_epoch.load(Ordering::Relaxed);
@@ -262,58 +286,40 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Check if this is a stake account
         let is_stake_account = stake::is_stake_account(account_change.new_account.owner());
 
-        // Handle epoch boundary detection
-        if current_epoch > stored_epoch {
-            info!("Detected new epoch {} at slot {} (previous epoch: {})", 
-                current_epoch, slot, stored_epoch);
+        // Handle epoch boundary detection for stake accounts
+        if current_epoch > stored_epoch && is_stake_account {
+            info!("First stake account in new epoch {} at slot {}", current_epoch, slot);
             
-            // If this is the first change in the new epoch, compute validator set
-            if self.epoch_first_change_seen.compare_exchange(
-                false, true, Ordering::SeqCst, Ordering::SeqCst
-            ).is_ok() {
-                self.compute_and_store_epoch_validators(stored_epoch, slot);
-                self.current_epoch.store(current_epoch, Ordering::Relaxed);
-                // Clear the accumulator for the new epoch
-                self.epoch_stake_accumulator.clear();
-                // Reset the flag for the next epoch
-                self.epoch_first_change_seen.store(false, Ordering::Relaxed);
-            }
-        }
-
-        // Process stake account if applicable
-        if is_stake_account {
+            // Process validator set for the new epoch
+            self.compute_and_store_epoch_validators(stored_epoch, slot);
+            self.current_epoch.store(current_epoch, Ordering::Relaxed);
+            
+            // Clear and rebuild stake accumulator
+            self.epoch_stake_accumulator.clear();
+            
+            // Process this stake account
             match stake::deserialize_stake_state(account_change.new_account.data()) {
                 Ok(stake_state) => {
                     let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
-                    
-                    // Store in accumulator for epoch boundary calculations
                     self.epoch_stake_accumulator.insert(
                         account_change.pubkey.to_string(),
-                        stake_info.clone()
+                        stake_info
                     );
-                    
-                    // Convert to DB type
-                    let db_stake_info = DbStakeAccountInfo {
-                        stake_pubkey: stake_info.stake_pubkey,
-                        voter_pubkey: stake_info.voter_pubkey,
-                        stake_amount: stake_info.stake_amount,
-                        activation_epoch: stake_info.activation_epoch,
-                        deactivation_epoch: stake_info.deactivation_epoch,
-                        credits_observed: stake_info.credits_observed,
-                        rent_exempt_reserve: stake_info.rent_exempt_reserve,
-                        staker: stake_info.staker,
-                        withdrawer: stake_info.withdrawer,
-                        state_type: stake_info.state_type,
-                    };
-                    
-                    // Send to database
-                    if let Some(queue) = &self.db_writer_queue {
-                        let _ = queue.send(DbWriteCommand::StakeAccountChange {
-                            slot,
-                            stake_info: db_stake_info,
-                            lthash: account_change.new_lthash.0.iter().map(|&x| x as u8).collect(),
-                        });
-                    }
+                }
+                Err(e) => {
+                    debug!("Failed to deserialize stake account {}: {}", 
+                        account_change.pubkey, e);
+                }
+            }
+        } else if is_stake_account && current_epoch == stored_epoch {
+            // Continue accumulating stakes for current epoch
+            match stake::deserialize_stake_state(account_change.new_account.data()) {
+                Ok(stake_state) => {
+                    let stake_info = StakeAccountInfo::from_state(&account_change.pubkey, &stake_state);
+                    self.epoch_stake_accumulator.insert(
+                        account_change.pubkey.to_string(),
+                        stake_info
+                    );
                 }
                 Err(e) => {
                     debug!("Failed to deserialize stake account {}: {}", 
@@ -332,7 +338,13 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Atomically increment writer count
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
-        // Check if this is a monitored account
+        // Estimate memory usage for this account change
+        let memory_size = std::mem::size_of::<OwnedAccountChange>() + 
+                         account_change.new_account.data().len() +
+                         account_change.old_account.data().len();
+        slot_data.memory_usage.fetch_add(memory_size, Ordering::Relaxed);
+
+        // Only buffer if this is a monitored account
         if self.monitored_accounts.contains(&account_change.pubkey) {
             slot_data
                 .contains_monitored_change
@@ -342,10 +354,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
             self.stats
                 .monitored_account_changes
                 .fetch_add(1, Ordering::Relaxed);
+            
+            // Buffer the account change
+            slot_data.buffer.push(account_change);
         }
-
-        // Push to buffer - take ownership directly
-        slot_data.buffer.push(account_change);
+        // Note: We don't buffer stake accounts - we handle them separately via epoch_stake_accumulator
 
         // Update stats
         self.stats.total_updates.fetch_add(1, Ordering::Relaxed);
@@ -599,6 +612,9 @@ impl TwineGeyserPlugin {
             }
         };
 
+        // Parse vote instruction details
+        let vote_details = self.parse_vote_instruction(transaction);
+
         // Create transaction metadata
         let transaction_meta = serde_json::json!({
             "compute_units_consumed": transaction_status_meta.compute_units_consumed,
@@ -611,6 +627,12 @@ impl TwineGeyserPlugin {
             vote_signature: signature.to_string(),
             vote_transaction: serialized_tx,
             transaction_meta: Some(transaction_meta),
+            vote_type: vote_details.vote_type.clone(),
+            vote_slot: vote_details.vote_slot,
+            vote_hash: vote_details.vote_hash.clone(),
+            root_slot: vote_details.root_slot,
+            lockouts_count: vote_details.lockouts_count,
+            timestamp: vote_details.timestamp,
         };
 
         // Get or create airlock slot data
@@ -623,30 +645,168 @@ impl TwineGeyserPlugin {
         // Add vote transaction to slot
         slot_data.vote_transactions.write().push(vote_tx);
 
+        // Update stats
+        self.stats.vote_transactions_total.fetch_add(1, Ordering::Relaxed);
+        match vote_details.vote_type.as_str() {
+            "tower_sync" | "tower_sync_switch" => {
+                self.stats.tower_sync_count.fetch_add(1, Ordering::Relaxed);
+            }
+            "compact_vote_state_update" | "compact_vote_state_update_switch" => {
+                self.stats.compact_vote_count.fetch_add(1, Ordering::Relaxed);
+            }
+            "vote" | "vote_switch" | "vote_state_update" | "vote_state_update_switch" => {
+                self.stats.vote_switch_count.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                self.stats.other_vote_count.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         info!(
-            "Recorded vote transaction for slot {} from validator {}",
-            slot, vote_pubkey
+            "Recorded {} vote transaction for slot {} from validator {} (voting on slot {:?})",
+            vote_details.vote_type, slot, vote_pubkey, vote_details.vote_slot
         );
 
         Ok(())
     }
-
+    
+    fn parse_vote_instruction(&self, transaction: &SanitizedTransaction) -> VoteDetails {
+        use solana_sdk::vote::{self, instruction::VoteInstruction};
+        
+        let mut vote_details = VoteDetails {
+            vote_type: "unknown".to_string(),
+            vote_slot: None,
+            vote_hash: None,
+            root_slot: None,
+            lockouts_count: None,
+            timestamp: None,
+        };
+        
+        // Get the vote program ID
+        let vote_program_id = vote::program::id();
+        
+        // Find vote instructions in the transaction
+        for (program_id, instruction) in transaction.message().program_instructions_iter() {
+            if program_id == &vote_program_id {
+                // Try to decode the vote instruction
+                match bincode::deserialize::<VoteInstruction>(&instruction.data) {
+                    Ok(VoteInstruction::Vote(vote)) => {
+                        vote_details.vote_type = "vote".to_string();
+                        if let Some(last_vote) = vote.slots.last() {
+                            vote_details.vote_slot = Some(*last_vote);
+                        }
+                        vote_details.vote_hash = Some(vote.hash.to_string());
+                        vote_details.lockouts_count = Some(vote.slots.len() as u64);
+                        vote_details.timestamp = vote.timestamp;
+                    }
+                    Ok(VoteInstruction::VoteSwitch(vote_switch, _)) => {
+                        vote_details.vote_type = "vote_switch".to_string();
+                        if let Some(last_vote) = vote_switch.slots.last() {
+                            vote_details.vote_slot = Some(*last_vote);
+                        }
+                        vote_details.vote_hash = Some(vote_switch.hash.to_string());
+                        vote_details.lockouts_count = Some(vote_switch.slots.len() as u64);
+                        vote_details.timestamp = vote_switch.timestamp;
+                    }
+                    Ok(VoteInstruction::UpdateVoteState(vote_state_update)) => {
+                        vote_details.vote_type = "update_vote_state".to_string();
+                        if let Some(last_vote) = vote_state_update.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(vote_state_update.hash.to_string());
+                        vote_details.root_slot = vote_state_update.root;
+                        vote_details.lockouts_count = Some(vote_state_update.lockouts.len() as u64);
+                        vote_details.timestamp = vote_state_update.timestamp;
+                    }
+                    Ok(VoteInstruction::UpdateVoteStateSwitch(vote_state_update, _)) => {
+                        vote_details.vote_type = "update_vote_state_switch".to_string();
+                        if let Some(last_vote) = vote_state_update.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(vote_state_update.hash.to_string());
+                        vote_details.root_slot = vote_state_update.root;
+                        vote_details.lockouts_count = Some(vote_state_update.lockouts.len() as u64);
+                        vote_details.timestamp = vote_state_update.timestamp;
+                    }
+                    Ok(VoteInstruction::CompactUpdateVoteState(compact_vote_state_update)) => {
+                        vote_details.vote_type = "compact_update_vote_state".to_string();
+                        if let Some(last_vote) = compact_vote_state_update.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(compact_vote_state_update.hash.to_string());
+                        vote_details.root_slot = compact_vote_state_update.root;
+                        vote_details.lockouts_count = Some(compact_vote_state_update.lockouts.len() as u64);
+                        vote_details.timestamp = compact_vote_state_update.timestamp;
+                    }
+                    Ok(VoteInstruction::CompactUpdateVoteStateSwitch(compact_vote_state_update, _)) => {
+                        vote_details.vote_type = "compact_update_vote_state_switch".to_string();
+                        if let Some(last_vote) = compact_vote_state_update.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(compact_vote_state_update.hash.to_string());
+                        vote_details.root_slot = compact_vote_state_update.root;
+                        vote_details.lockouts_count = Some(compact_vote_state_update.lockouts.len() as u64);
+                        vote_details.timestamp = compact_vote_state_update.timestamp;
+                    }
+                    Ok(VoteInstruction::TowerSync(tower_sync)) => {
+                        vote_details.vote_type = "tower_sync".to_string();
+                        if let Some(last_vote) = tower_sync.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(tower_sync.hash.to_string());
+                        vote_details.root_slot = tower_sync.root;
+                        vote_details.lockouts_count = Some(tower_sync.lockouts.len() as u64);
+                        vote_details.timestamp = tower_sync.timestamp;
+                    }
+                    Ok(VoteInstruction::TowerSyncSwitch(tower_sync, _)) => {
+                        vote_details.vote_type = "tower_sync_switch".to_string();
+                        if let Some(last_vote) = tower_sync.lockouts.back() {
+                            vote_details.vote_slot = Some(last_vote.slot());
+                        }
+                        vote_details.vote_hash = Some(tower_sync.hash.to_string());
+                        vote_details.root_slot = tower_sync.root;
+                        vote_details.lockouts_count = Some(tower_sync.lockouts.len() as u64);
+                        vote_details.timestamp = tower_sync.timestamp;
+                    }
+                    Ok(_) => {
+                        // Other vote instructions (Authorize, InitializeAccount, etc.)
+                        vote_details.vote_type = "other".to_string();
+                    }
+                    Err(e) => {
+                        debug!("Failed to parse vote instruction: {}", e);
+                    }
+                }
+                
+                // We found and processed a vote instruction, so we can break
+                break;
+            }
+        }
+        
+        vote_details
+    }
+    
     fn try_write_complete_slot(&self, slot: u64) -> PluginResult<()> {
         // Check if slot exists and has complete data
         if let Some(slot_data_ref) = self.airlock.get(&slot) {
             let slot_data = slot_data_ref.value();
             if slot_data.has_complete_data() && slot_data.is_rooted() {
-                // Drop the reference before we try to remove
+                // Clone the Arc instead of removing immediately
+                let slot_data_clone = slot_data.clone();
+                
+                // Drop the reference to avoid holding lock
                 drop(slot_data_ref);
                 
-                // Remove the slot from airlock
-                if let Some((_, slot_data)) = self.airlock.remove(&slot) {
-                    // Wait for all writers to finish
-                    while slot_data.writer_count.load(Ordering::Acquire) > 0 {
-                        std::hint::spin_loop();
-                    }
-                    
-                    self.write_slot_to_database(slot, slot_data)?;
+                // Wait for all writers to finish
+                while slot_data_clone.writer_count.load(Ordering::Acquire) > 0 {
+                    std::hint::spin_loop();
+                }
+                
+                // Write to database without removing from airlock
+                self.write_slot_to_database(slot, slot_data_clone)?;
+                
+                // Add to cleanup queue for delayed removal
+                if let Ok(mut queue) = self.cleanup_queue.lock() {
+                    queue.push_back((slot, Instant::now()));
                 }
             }
             else {
@@ -716,26 +876,39 @@ impl TwineGeyserPlugin {
 
         self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
 
-        // Send account changes if any
-        let mut monitored_changes = Vec::new();
-        while let Some(change) = slot_data.buffer.pop() {
-            if self.monitored_accounts.contains(&change.pubkey) {
-                monitored_changes.push(change);
+        // Handle monitored account changes if any
+        if slot_data.contains_monitored_change.load(Ordering::Acquire) {
+            info!("Monitored account change detected, saving account changes for slot {}", slot);
+            
+            let mut all_changes = Vec::new();
+            while let Some(change) = slot_data.buffer.pop() {
+                all_changes.push(change);
             }
-        }
-
-        if !monitored_changes.is_empty() {
-            queue
-                .send(DbWriteCommand::AccountChanges {
-                    slot,
-                    changes: monitored_changes,
-                })
-                .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
-
-            self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
-            self.stats
-                .slots_with_monitored_accounts
-                .fetch_add(1, Ordering::Relaxed);
+            
+            if !all_changes.is_empty() {
+                let change_count = all_changes.len();
+                queue
+                    .send(DbWriteCommand::AccountChanges {
+                        slot,
+                        changes: all_changes,
+                    })
+                    .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
+                
+                self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
+                self.stats
+                    .slots_with_monitored_accounts
+                    .fetch_add(1, Ordering::Relaxed);
+                info!("Saved {} account changes for slot {}", change_count, slot);
+            }
+        } else {
+            // No monitored changes - clear the buffer without saving
+            let mut discarded_count = 0;
+            while slot_data.buffer.pop().is_some() {
+                discarded_count += 1;
+            }
+            if discarded_count > 0 {
+                debug!("Discarded {} account changes for slot {} (no monitored accounts)", discarded_count, slot);
+            }
         }
 
         // Update stats
@@ -781,8 +954,9 @@ impl TwineGeyserPlugin {
             .or_insert_with(|| Arc::new(AirlockSlotData::new()))
             .clone();
 
-        // Update slot status to rooted
+        // Update slot status to rooted and record current slot
         *slot_data.status.write() = "rooted".to_string();
+        *slot_data.rooted_at_slot.write() = Some(slot);
 
         // Send status update
         queue
@@ -805,16 +979,42 @@ impl TwineGeyserPlugin {
             );
             self.try_write_complete_slot(slot)?;
         } else {
-            // Log what we're missing
-            let has_bank_hash = slot_data.bank_hash_components.read().as_ref()
+            // Log what we're missing with detailed information
+            let bank_hash_components = slot_data.bank_hash_components.read();
+            let has_bank_hash = bank_hash_components.as_ref()
                 .map(|c| !c.bank_hash.is_empty())
                 .unwrap_or(false);
+            let bank_hash_details = if has_bank_hash {
+                bank_hash_components.as_ref()
+                    .map(|c| format!("present ({})", c.bank_hash))
+                    .unwrap_or_else(|| "present but empty".to_string())
+            } else {
+                "MISSING".to_string()
+            };
+            drop(bank_hash_components);
+            
             let has_delta = slot_data.delta_lthash.read().is_some();
             let has_cumulative = slot_data.cumulative_lthash.read().is_some();
+            let has_blockhash = slot_data.blockhash.read().is_some();
+            let has_parent_slot = slot_data.parent_slot.read().is_some();
+            let has_executed_transaction_count = slot_data.executed_transaction_count.read().is_some();
+            let has_entry_count = slot_data.entry_count.read().is_some();
             
-            info!(
-                "Slot {} rooted but missing data - bank_hash: {}, delta_lthash: {}, cumulative_lthash: {}, keeping in airlock",
-                slot, has_bank_hash, has_delta, has_cumulative
+            // Log missing data counter
+            self.stats
+                .airlock_missing_data_slots
+                .fetch_add(1, Ordering::Relaxed);
+            
+            warn!(
+                "Slot {} rooted but INCOMPLETE - bank_hash: {}, delta_lthash: {}, cumulative_lthash: {}, blockhash: {}, parent_slot: {}, executed_transaction_count: {}, entry_count: {}, keeping in airlock",
+                slot, 
+                bank_hash_details,
+                if has_delta { "present" } else { "MISSING" },
+                if has_cumulative { "present" } else { "MISSING" },
+                if has_blockhash { "present" } else { "MISSING" },
+                if has_parent_slot { "present" } else { "MISSING" },
+                if has_executed_transaction_count { "present" } else { "MISSING" },
+                if has_entry_count { "present" } else { "MISSING" }
             );
         }
 
@@ -1044,6 +1244,193 @@ impl TwineGeyserPlugin {
         self.metrics_server = Some(handle);
     }
     
+    fn start_cleanup_task(&mut self) {
+        let airlock = self.airlock.clone();
+        let cleanup_queue = self.cleanup_queue.clone();
+        let stats = self.stats.clone();
+        let db_writer_queue = self.db_writer_queue.clone();
+        
+        let runtime = match self.runtime.as_ref() {
+            Some(r) => r,
+            None => {
+                error!("Cannot start cleanup task: runtime not available");
+                return;
+            }
+        };
+        
+        let handle = runtime.spawn(async move {
+            // Run cleanup every 30 seconds
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            
+            loop {
+                interval.tick().await;
+                
+                // Process cleanup queue
+                let mut slots_to_remove = Vec::new();
+                let mut incomplete_slots_to_write = Vec::new();
+                let current_time = Instant::now();
+                
+                // Get current network slot for grace period calculation
+                let current_network_slot = stats.last_db_batch_slot.load(Ordering::Relaxed) as u64;
+                
+                // Check for incomplete rooted slots that have exceeded grace period (32 slots)
+                for entry in airlock.iter() {
+                    let slot = *entry.key();
+                    let slot_data = entry.value();
+                    
+                    if let Some(rooted_at_slot) = *slot_data.rooted_at_slot.read() {
+                        if !slot_data.has_complete_data() && 
+                           current_network_slot > rooted_at_slot + 32 {
+                            // This slot has been rooted for over 32 slots without complete data
+                            incomplete_slots_to_write.push((slot, slot_data.clone()));
+                        }
+                    }
+                }
+                
+                // Check which slots are ready for cleanup (older than 5 minutes)
+                if let Ok(mut queue) = cleanup_queue.lock() {
+                    while let Some(&(slot, insert_time)) = queue.front() {
+                        if current_time.duration_since(insert_time).as_secs() > 300 {
+                            slots_to_remove.push(slot);
+                            queue.pop_front();
+                        } else {
+                            // Queue is ordered by time, so we can stop here
+                            break;
+                        }
+                    }
+                }
+                
+                // Calculate current memory usage before cleanup
+                let mut total_memory = 0;
+                for entry in airlock.iter() {
+                    let slot_data = entry.value();
+                    total_memory += slot_data.memory_usage.load(Ordering::Relaxed);
+                }
+                stats.total_memory_usage.store(total_memory, Ordering::Relaxed);
+                
+                // Update peak memory if necessary
+                let current_peak = stats.peak_memory_usage.load(Ordering::Relaxed);
+                if total_memory > current_peak {
+                    stats.peak_memory_usage.store(total_memory, Ordering::Relaxed);
+                }
+                
+                // Remove slots from airlock
+                let mut deleted_count = 0;
+                for slot in slots_to_remove {
+                    if let Some((_, slot_data)) = airlock.remove(&slot) {
+                        // Spin wait for writers to finish before dropping
+                        while slot_data.writer_count.load(Ordering::Acquire) > 0 {
+                            std::hint::spin_loop();
+                        }
+                        
+                        // Subtract memory usage from total
+                        let slot_memory = slot_data.memory_usage.load(Ordering::Relaxed);
+                        stats.total_memory_usage.fetch_sub(slot_memory, Ordering::Relaxed);
+                        
+                        deleted_count += 1;
+                        debug!("Cleaned up slot {} from memory (freed {} bytes)", slot, slot_memory);
+                    }
+                }
+                
+                // Update slots deleted counter
+                if deleted_count > 0 {
+                    stats.slots_deleted_total.fetch_add(deleted_count, Ordering::Relaxed);
+                }
+                
+                // Write incomplete slots that have exceeded grace period
+                for (slot, slot_data) in incomplete_slots_to_write {
+                    // Check what components are missing
+                    let mut missing = Vec::new();
+                    if slot_data.bank_hash_components.read().is_none() {
+                        missing.push("bank_hash");
+                    }
+                    if slot_data.delta_lthash.read().is_none() {
+                        missing.push("delta_lthash");
+                    }
+                    if slot_data.cumulative_lthash.read().is_none() {
+                        missing.push("cumulative_lthash");
+                    }
+                    if slot_data.blockhash.read().is_none() {
+                        missing.push("blockhash");
+                    }
+                    if slot_data.parent_slot.read().is_none() {
+                        missing.push("parent_slot");
+                    }
+                    if slot_data.executed_transaction_count.read().is_none() {
+                        missing.push("executed_transaction_count");
+                    }
+                    if slot_data.entry_count.read().is_none() {
+                        missing.push("entry_count");
+                    }
+                    
+                    warn!(
+                        "Writing incomplete slot {} to database after 32 slot grace period - missing: [{}]",
+                        slot, missing.join(", ")
+                    );
+                    
+                    // Create the command to write the incomplete slot
+                    // Extract whatever data we have, use empty/zero values for missing data
+                    let components = slot_data.bank_hash_components.read().clone()
+                        .unwrap_or_else(|| BankHashComponentsInfo {
+                            slot,
+                            bank_hash: String::new(),
+                            parent_bank_hash: String::new(),
+                            signature_count: 0,
+                            last_blockhash: String::new(),
+                            accounts_delta_hash: None,
+                            accounts_lthash_checksum: None,
+                            epoch_accounts_hash: None,
+                        });
+                    
+                    let delta_lthash = slot_data.delta_lthash.read().clone()
+                        .unwrap_or_else(|| vec![0u8; 32]); // 32 zero bytes for missing lthash
+                    let cumulative_lthash = slot_data.cumulative_lthash.read().clone()
+                        .unwrap_or_else(|| vec![0u8; 32]); // 32 zero bytes for missing lthash
+                    let blockhash = slot_data.blockhash.read().clone();
+                    let parent_slot = slot_data.parent_slot.read().clone();
+                    let executed_transaction_count = slot_data.executed_transaction_count.read().clone();
+                    let entry_count = slot_data.entry_count.read().clone();
+                    let vote_transactions = slot_data.vote_transactions.read().clone();
+                    
+                    // Send to database queue
+                    if let Some(queue) = db_writer_queue.as_ref() {
+                        let _ = queue.send(DbWriteCommand::SlotData {
+                                slot,
+                                bank_hash: components.bank_hash,
+                                parent_bank_hash: components.parent_bank_hash,
+                                signature_count: components.signature_count,
+                                last_blockhash: components.last_blockhash,
+                                delta_lthash,
+                                cumulative_lthash,
+                                accounts_delta_hash: components.accounts_delta_hash,
+                                accounts_lthash_checksum: components.accounts_lthash_checksum,
+                                epoch_accounts_hash: components.epoch_accounts_hash,
+                                blockhash,
+                                parent_slot,
+                                executed_transaction_count,
+                                entry_count,
+                                vote_transactions,
+                            });
+                            
+                            // Add to cleanup queue for later removal
+                            if let Ok(mut cleanup) = cleanup_queue.lock() {
+                                cleanup.push_back((slot, Instant::now()));
+                            }
+                            
+                            stats.db_writes.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                
+                // Update slot count stats
+                let slot_count = airlock.len();
+                stats.active_slots.store(slot_count, Ordering::Relaxed);
+                stats.slots_in_memory.store(slot_count, Ordering::Relaxed);
+            }
+        });
+        
+        self.cleanup_task = Some(handle);
+    }
+    
     fn start_api_server(&mut self) {
         let monitored_accounts = self.monitored_accounts.clone();
         let config = match self.config.as_ref() {
@@ -1139,6 +1526,35 @@ impl TwineGeyserPlugin {
         }
     }
 
+    /// Verify a vote transaction signature
+    /// This function can be used to verify that a stored vote transaction has a valid signature
+    #[allow(dead_code)]
+    fn verify_vote_transaction_signature(
+        transaction_bytes: &[u8],
+        signature_str: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        use solana_sdk::signature::Signature;
+        use solana_sdk::transaction::VersionedTransaction;
+        
+        // Deserialize the transaction
+        let transaction: VersionedTransaction = bincode::deserialize(transaction_bytes)?;
+        
+        // Parse the signature
+        let signature = Signature::from_str(signature_str)?;
+        
+        // Get the message to verify
+        let message_bytes = transaction.message.serialize();
+        
+        // Get the public key (first account is the signer for vote transactions)
+        let pubkey = transaction.message.static_account_keys().get(0)
+            .ok_or("No public key found in transaction")?;
+        
+        // Verify the signature
+        let verified = signature.verify(pubkey.as_ref(), &message_bytes);
+        
+        Ok(verified)
+    }
+    
     fn compute_and_store_epoch_validators(&self, epoch: u64, computed_at_slot: u64) {
         // Aggregate stakes by validator from accumulated stake accounts
         let mut validator_stakes: HashMap<String, u64> = HashMap::new();

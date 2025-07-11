@@ -26,6 +26,7 @@ actix-web = "4"
 # Other dependencies
 log = "0.4"
 env_logger = "0.11"
+clap = { version = "4.5", features = ["derive"], optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dashmap = "6.1"
@@ -49,6 +50,12 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = []
+verify-tool = ["clap"]
+
+[[bin]]
+name = "verify_vote_signatures"
+path = "src/bin/verify_vote_signatures.rs"
+required-features = ["verify-tool"]
 
 [patch.crates-io]
 agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }

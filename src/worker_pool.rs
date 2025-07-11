@@ -397,9 +397,17 @@ async fn process_slot_batch(
             for vote_tx in vote_transactions {
                 let vote_query = r#"
                     INSERT INTO vote_transactions (
-                        slot, voter_pubkey, vote_signature, vote_transaction, transaction_meta
-                    ) VALUES ($1, $2, $3, $4, $5)
-                    ON CONFLICT (slot, voter_pubkey, vote_signature) DO NOTHING
+                        slot, voter_pubkey, vote_signature, vote_transaction, transaction_meta,
+                        vote_type, vote_slot, vote_hash, root_slot, lockouts_count, timestamp
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT (slot, voter_pubkey, vote_signature) DO UPDATE SET
+                        transaction_meta = EXCLUDED.transaction_meta,
+                        vote_type = EXCLUDED.vote_type,
+                        vote_slot = EXCLUDED.vote_slot,
+                        vote_hash = EXCLUDED.vote_hash,
+                        root_slot = EXCLUDED.root_slot,
+                        lockouts_count = EXCLUDED.lockouts_count,
+                        timestamp = EXCLUDED.timestamp
                 "#;
                 
                 client
@@ -410,7 +418,13 @@ async fn process_slot_batch(
                             &vote_tx.voter_pubkey,
                             &vote_tx.vote_signature,
                             &vote_tx.vote_transaction,
-                            &vote_tx.transaction_meta.as_ref().map(|v| v.to_string()),
+                            &vote_tx.transaction_meta,
+                            &vote_tx.vote_type,
+                            &vote_tx.vote_slot.map(|s| s as i64),
+                            &vote_tx.vote_hash,
+                            &vote_tx.root_slot.map(|s| s as i64),
+                            &vote_tx.lockouts_count.map(|c| c as i32),
+                            &vote_tx.timestamp,
                         ],
                     )
                     .await?;

@@ -39,6 +39,20 @@ pub struct AirlockStats {
     pub airlock_missing_data_slots: AtomicUsize,
     pub slot_status_updates: AtomicUsize,
     pub block_metadata_received: AtomicUsize,
+    // Memory tracking
+    pub total_memory_usage: AtomicUsize,
+    pub peak_memory_usage: AtomicUsize,
+    pub slots_in_memory: AtomicUsize,
+    // Vote tracking
+    pub vote_transactions_total: AtomicUsize,
+    pub tower_sync_count: AtomicUsize,
+    pub compact_vote_count: AtomicUsize,
+    pub vote_switch_count: AtomicUsize,
+    pub other_vote_count: AtomicUsize,
+    // Memory management
+    pub slots_deleted_total: AtomicUsize,
+    pub stakes_saved_total: AtomicUsize,
+    pub vote_buffer_memory_bytes: AtomicUsize,
 }
 
 impl Default for AirlockStats {
@@ -65,6 +79,20 @@ impl Default for AirlockStats {
             airlock_missing_data_slots: AtomicUsize::new(0),
             slot_status_updates: AtomicUsize::new(0),
             block_metadata_received: AtomicUsize::new(0),
+            // Memory tracking
+            total_memory_usage: AtomicUsize::new(0),
+            peak_memory_usage: AtomicUsize::new(0),
+            slots_in_memory: AtomicUsize::new(0),
+            // Vote tracking
+            vote_transactions_total: AtomicUsize::new(0),
+            tower_sync_count: AtomicUsize::new(0),
+            compact_vote_count: AtomicUsize::new(0),
+            vote_switch_count: AtomicUsize::new(0),
+            other_vote_count: AtomicUsize::new(0),
+            // Memory management
+            slots_deleted_total: AtomicUsize::new(0),
+            stakes_saved_total: AtomicUsize::new(0),
+            vote_buffer_memory_bytes: AtomicUsize::new(0),
         }
     }
 }
@@ -213,6 +241,19 @@ impl AirlockStats {
             airlock_missing_data_slots: self.airlock_missing_data_slots.load(Ordering::Relaxed),
             slot_status_updates: self.slot_status_updates.load(Ordering::Relaxed),
             block_metadata_received: self.block_metadata_received.load(Ordering::Relaxed),
+            total_memory_usage: self.total_memory_usage.load(Ordering::Relaxed),
+            peak_memory_usage: self.peak_memory_usage.load(Ordering::Relaxed),
+            slots_in_memory: self.slots_in_memory.load(Ordering::Relaxed),
+            // Vote tracking
+            vote_transactions_total: self.vote_transactions_total.load(Ordering::Relaxed),
+            tower_sync_count: self.tower_sync_count.load(Ordering::Relaxed),
+            compact_vote_count: self.compact_vote_count.load(Ordering::Relaxed),
+            vote_switch_count: self.vote_switch_count.load(Ordering::Relaxed),
+            other_vote_count: self.other_vote_count.load(Ordering::Relaxed),
+            // Memory management
+            slots_deleted_total: self.slots_deleted_total.load(Ordering::Relaxed),
+            stakes_saved_total: self.stakes_saved_total.load(Ordering::Relaxed),
+            vote_buffer_memory_bytes: self.vote_buffer_memory_bytes.load(Ordering::Relaxed),
         }
     }
 }
@@ -239,4 +280,17 @@ pub struct AirlockStatsSnapshot {
     pub airlock_missing_data_slots: usize,
     pub slot_status_updates: usize,
     pub block_metadata_received: usize,
+    pub total_memory_usage: usize,
+    pub peak_memory_usage: usize,
+    pub slots_in_memory: usize,
+    // Vote tracking
+    pub vote_transactions_total: usize,
+    pub tower_sync_count: usize,
+    pub compact_vote_count: usize,
+    pub vote_switch_count: usize,
+    pub other_vote_count: usize,
+    // Memory management
+    pub slots_deleted_total: usize,
+    pub stakes_saved_total: usize,
+    pub vote_buffer_memory_bytes: usize,
 }

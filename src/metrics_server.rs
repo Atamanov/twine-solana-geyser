@@ -206,6 +206,50 @@ twine_geyser_slot_status_updates {}
 # HELP twine_geyser_block_metadata_received Total block metadata notifications received
 # TYPE twine_geyser_block_metadata_received counter
 twine_geyser_block_metadata_received {}
+
+# HELP twine_geyser_airlock_memory_usage_bytes Total memory usage by airlock slots
+# TYPE twine_geyser_airlock_memory_usage_bytes gauge
+twine_geyser_airlock_memory_usage_bytes {}
+
+# HELP twine_geyser_airlock_peak_memory_bytes Peak memory usage by airlock slots
+# TYPE twine_geyser_airlock_peak_memory_bytes gauge
+twine_geyser_airlock_peak_memory_bytes {}
+
+# HELP twine_geyser_airlock_slots_in_memory Number of slots currently in memory
+# TYPE twine_geyser_airlock_slots_in_memory gauge
+twine_geyser_airlock_slots_in_memory {}
+
+# HELP twine_geyser_vote_transactions_total Total vote transactions processed
+# TYPE twine_geyser_vote_transactions_total counter
+twine_geyser_vote_transactions_total {}
+
+# HELP twine_geyser_tower_sync_count Total TowerSync vote transactions
+# TYPE twine_geyser_tower_sync_count counter
+twine_geyser_tower_sync_count {}
+
+# HELP twine_geyser_compact_vote_count Total CompactVoteStateUpdate transactions
+# TYPE twine_geyser_compact_vote_count counter
+twine_geyser_compact_vote_count {}
+
+# HELP twine_geyser_vote_switch_count Total VoteSwitch transactions
+# TYPE twine_geyser_vote_switch_count counter
+twine_geyser_vote_switch_count {}
+
+# HELP twine_geyser_other_vote_count Total other vote transactions
+# TYPE twine_geyser_other_vote_count counter
+twine_geyser_other_vote_count {}
+
+# HELP twine_geyser_slots_deleted_total Total slots deleted from memory
+# TYPE twine_geyser_slots_deleted_total counter
+twine_geyser_slots_deleted_total {}
+
+# HELP twine_geyser_stakes_saved_total Total stake updates saved to database
+# TYPE twine_geyser_stakes_saved_total counter
+twine_geyser_stakes_saved_total {}
+
+# HELP twine_geyser_vote_buffer_memory_bytes Memory used by vote transaction buffer
+# TYPE twine_geyser_vote_buffer_memory_bytes gauge
+twine_geyser_vote_buffer_memory_bytes {}
 "#,
         snapshot.total_updates,
         snapshot.sealed_slots,
@@ -234,6 +278,17 @@ twine_geyser_block_metadata_received {}
         snapshot.airlock_missing_data_slots,
         snapshot.slot_status_updates,
         snapshot.block_metadata_received,
+        snapshot.total_memory_usage,
+        snapshot.peak_memory_usage,
+        snapshot.slots_in_memory,
+        snapshot.vote_transactions_total,
+        snapshot.tower_sync_count,
+        snapshot.compact_vote_count,
+        snapshot.vote_switch_count,
+        snapshot.other_vote_count,
+        snapshot.slots_deleted_total,
+        snapshot.stakes_saved_total,
+        snapshot.vote_buffer_memory_bytes,
     );
 
     (StatusCode::OK, metrics)

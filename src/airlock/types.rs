@@ -12,6 +12,12 @@ pub struct VoteTransaction {
     pub vote_signature: String,
     pub vote_transaction: Vec<u8>,  // Serialized transaction
     pub transaction_meta: Option<serde_json::Value>,
+    pub vote_type: String,  // Type of vote instruction
+    pub vote_slot: Option<u64>,  // The slot being voted for
+    pub vote_hash: Option<String>,  // The hash being voted for
+    pub root_slot: Option<u64>,  // Root slot for TowerSync
+    pub lockouts_count: Option<u64>,  // Number of lockouts
+    pub timestamp: Option<i64>,  // Vote timestamp
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +112,10 @@ pub struct AirlockSlotData {
     pub created_at: std::time::Instant,
     /// Vote transactions in this slot
     pub vote_transactions: parking_lot::RwLock<Vec<VoteTransaction>>,
+    /// Estimated memory usage in bytes
+    pub memory_usage: AtomicUsize,
+    /// Slot number when this slot was marked as rooted (for grace period handling)
+    pub rooted_at_slot: parking_lot::RwLock<Option<u64>>,
 }
 
 impl SlotAirlock {
@@ -134,6 +144,8 @@ impl AirlockSlotData {
             status: parking_lot::RwLock::new("created".to_string()),
             created_at: std::time::Instant::now(),
             vote_transactions: parking_lot::RwLock::new(Vec::new()),
+            memory_usage: AtomicUsize::new(0),
+            rooted_at_slot: parking_lot::RwLock::new(None),
         }
     }
 

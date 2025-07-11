@@ -278,8 +278,14 @@ CREATE TABLE IF NOT EXISTS vote_transactions (
     slot BIGINT NOT NULL,
     voter_pubkey VARCHAR(88) NOT NULL,
     vote_signature VARCHAR(88) NOT NULL,
-    vote_transaction BYTEA NOT NULL,  -- Serialized transaction
+    vote_transaction BYTEA NOT NULL,  -- Serialized transaction for signature verification
     transaction_meta JSONB,           -- Transaction metadata (compute units, etc)
+    vote_type VARCHAR(50),            -- Type of vote instruction (e.g., tower_sync, compact_vote_state_update)
+    vote_slot BIGINT,                 -- The slot being voted for
+    vote_hash VARCHAR(88),            -- The hash being voted for
+    root_slot BIGINT,                 -- Root slot for TowerSync/UpdateVoteState
+    lockouts_count INTEGER,           -- Number of lockout slots
+    timestamp BIGINT,                 -- Vote timestamp from instruction
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (slot, voter_pubkey, vote_signature)
 );
@@ -293,6 +299,10 @@ SELECT create_hypertable('vote_transactions', 'slot',
 CREATE INDEX idx_vote_transactions_voter ON vote_transactions(voter_pubkey, slot DESC);
 CREATE INDEX idx_vote_transactions_signature ON vote_transactions(vote_signature);
 CREATE INDEX idx_vote_transactions_created ON vote_transactions(created_at DESC);
+CREATE INDEX idx_vote_transactions_type ON vote_transactions(vote_type);
+CREATE INDEX idx_vote_transactions_vote_slot ON vote_transactions(vote_slot DESC) WHERE vote_slot IS NOT NULL;
+CREATE INDEX idx_vote_transactions_root_slot ON vote_transactions(root_slot DESC) WHERE root_slot IS NOT NULL;
+CREATE INDEX idx_vote_transactions_type_slot ON vote_transactions(vote_type, slot DESC);
 
 -- Create table for epoch validator stakes
 CREATE TABLE IF NOT EXISTS epoch_stakes (
@@ -367,6 +377,12 @@ SELECT
     vt.slot,
     vt.voter_pubkey,
     vt.vote_signature,
+    vt.vote_type,
+    vt.vote_slot,
+    vt.vote_hash,
+    vt.root_slot,
+    vt.lockouts_count,
+    vt.timestamp,
     vt.created_at,
     COALESCE(evs.total_stake, 0) as validator_stake,
     COALESCE(evs.stake_percentage, 0) as stake_percentage,
@@ -482,6 +498,12 @@ SELECT
     vt.slot,
     vt.voter_pubkey,
     vt.vote_signature,
+    vt.vote_type,
+    vt.vote_slot,
+    vt.vote_hash,
+    vt.root_slot,
+    vt.lockouts_count,
+    vt.timestamp,
     vt.created_at,
     evs.total_stake as validator_stake,
     evs.stake_percentage,
@@ -496,3 +518,66 @@ LEFT JOIN epoch_validator_sets evs ON vt.voter_pubkey = evs.validator_pubkey
 WHERE vt.created_at > NOW() - INTERVAL '1 hour'
 ORDER BY vt.slot DESC
 LIMIT 100;
+
+-- Create view for vote type statistics
+CREATE OR REPLACE VIEW vote_type_statistics AS
+SELECT 
+    vote_type,
+    COUNT(*) as total_votes,
+    COUNT(DISTINCT voter_pubkey) as unique_voters,
+    AVG(lockouts_count) as avg_lockouts,
+    MIN(slot) as first_seen_slot,
+    MAX(slot) as last_seen_slot,
+    COUNT(DISTINCT vote_slot) as unique_vote_slots
+FROM vote_transactions
+WHERE vote_type IS NOT NULL
+GROUP BY vote_type
+ORDER BY total_votes DESC;
+
+-- Create view for tower sync analysis
+CREATE OR REPLACE VIEW tower_sync_analysis AS
+SELECT 
+    slot,
+    voter_pubkey,
+    vote_signature,
+    vote_slot,
+    root_slot,
+    lockouts_count,
+    timestamp,
+    created_at,
+    CASE 
+        WHEN root_slot IS NOT NULL THEN slot - root_slot
+        ELSE NULL
+    END as root_depth
+FROM vote_transactions
+WHERE vote_type IN ('tower_sync', 'tower_sync_switch')
+ORDER BY slot DESC;
+
+-- Create view for vote consistency analysis
+CREATE OR REPLACE VIEW vote_consistency_check AS
+WITH vote_sequence AS (
+    SELECT 
+        voter_pubkey,
+        slot,
+        vote_slot,
+        vote_type,
+        LAG(vote_slot) OVER (PARTITION BY voter_pubkey ORDER BY slot) as prev_vote_slot,
+        created_at
+    FROM vote_transactions
+    WHERE vote_slot IS NOT NULL
+)
+SELECT 
+    voter_pubkey,
+    slot,
+    vote_slot,
+    prev_vote_slot,
+    vote_type,
+    CASE 
+        WHEN prev_vote_slot IS NOT NULL AND vote_slot < prev_vote_slot THEN 'backwards_vote'
+        WHEN prev_vote_slot IS NOT NULL AND vote_slot - prev_vote_slot > 100 THEN 'large_gap'
+        ELSE 'normal'
+    END as vote_pattern,
+    created_at
+FROM vote_sequence
+WHERE created_at > NOW() - INTERVAL '1 hour'
+ORDER BY voter_pubkey, slot DESC;
