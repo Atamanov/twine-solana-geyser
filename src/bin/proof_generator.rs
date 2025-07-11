@@ -568,13 +568,53 @@ fn validate_lthash_transformation(
         }
     };
     
+    // Parse the stored delta LtHash
+    let stored_delta = match parse_lthash(&last_slot.delta_lthash) {
+        Ok(h) => h,
+        Err(e) => {
+            details.push_str(&format!("Failed to parse stored delta LtHash: {}\n", e));
+            return LtHashValidation {
+                previous_slot: prev_slot.slot,
+                last_slot: last_slot.slot,
+                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
+                calculated_new_lthash: "Error".to_string(),
+                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
+                valid: false,
+                details,
+            };
+        }
+    };
+    
+    // First, let's verify if prev_cumulative + stored_delta = stored_cumulative
+    let mut test_cumulative = prev_cumulative.clone();
+    test_cumulative.mix_in(&stored_delta);
+    let delta_check_matches = test_cumulative == stored_cumulative;
+    
+    let delta_check_msg = format!(
+        "Delta check: prev_cumulative + stored_delta {} stored_cumulative (prev + delta = {}, stored = {})",
+        if delta_check_matches { "==" } else { "!=" },
+        &format_lthash(&test_cumulative)[..32],
+        &format_lthash(&stored_cumulative)[..32]
+    );
+    if !delta_check_matches {
+        warn!("{}", delta_check_msg);
+    }
+    info!("{}", delta_check_msg);
+    details.push_str(&format!("{}\n", delta_check_msg));
+    
     // Start with previous cumulative LtHash
     let mut calculated_cumulative = prev_cumulative.clone();
     let start_msg = format!("Starting LtHash validation: prev_slot={}, last_slot={}", prev_slot.slot, last_slot.slot);
     info!("{}", start_msg);
     details.push_str(&format!("{}\n", start_msg));
     details.push_str(&format!("Starting with previous cumulative: {}\n", &format_lthash(&calculated_cumulative)[..32]));
+    details.push_str(&format!("Stored delta: {}\n", &format_lthash(&stored_delta)[..32]));
     details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
+    
+    // Let's also check the first few bytes in detail
+    info!("Previous cumulative first 16 bytes: {:02x?}", &prev_slot.cumulative_lthash[..16]);
+    info!("Stored cumulative first 16 bytes: {:02x?}", &last_slot.cumulative_lthash[..16]);
+    info!("Stored delta first 16 bytes: {:02x?}", &last_slot.delta_lthash[..16]);
     
     // Apply all account changes: mix out old, mix in new
     let mut mismatch_count = 0;
@@ -680,10 +720,17 @@ fn validate_lthash_transformation(
                 calculated_cumulative.mix_in(&stored_new_lt);
                 
                 if change.account_pubkey == target_pubkey {
-                    details.push_str(&format!(
-                        "\nMonitored account {}: applied change (verified: old={}, new={})\n",
+                    let monitored_msg = format!(
+                        "Monitored account {}: applied change (verified: old={}, new={})",
                         &change.account_pubkey[..8], old_matches, new_matches
-                    ));
+                    );
+                    info!("{}", monitored_msg);
+                    details.push_str(&format!("\n{}\n", monitored_msg));
+                    
+                    // Log the actual LtHash values for the monitored account
+                    info!("  Old LtHash: {} (first 32 chars of {})", &format_lthash(&stored_old_lt)[..32], format_lthash(&stored_old_lt).len());
+                    info!("  New LtHash: {} (first 32 chars of {})", &format_lthash(&stored_new_lt)[..32], format_lthash(&stored_new_lt).len());
+                    info!("  Cumulative after: {}", &format_lthash(&calculated_cumulative)[..32]);
                 }
             }
             (Err(e1), _) => {
@@ -718,6 +765,19 @@ fn validate_lthash_transformation(
             }
         }
     }
+    
+    // Calculate what our delta is
+    let mut calculated_delta = LtHash::identity();
+    calculated_delta.mix_in(&calculated_cumulative);
+    calculated_delta.mix_out(&prev_cumulative);
+    
+    let delta_comparison = format!(
+        "Delta comparison: calculated_delta={}, stored_delta={}",
+        &format_lthash(&calculated_delta)[..32],
+        &format_lthash(&stored_delta)[..32]
+    );
+    info!("{}", delta_comparison);
+    details.push_str(&format!("\n{}\n", delta_comparison));
     
     // Add summary of mismatches
     if mismatch_count > 0 {
