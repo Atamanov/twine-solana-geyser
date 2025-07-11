@@ -1,17 +1,19 @@
+mod types;
+mod utils;
+
 use clap::Parser;
 use deadpool_postgres::{Config as DbConfig, Pool, Runtime as DbRuntime};
 use log::*;
-use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    hash::Hash,
     pubkey::Pubkey,
     transaction::Transaction,
 };
 use std::str::FromStr;
 use tokio_postgres::NoTls;
+use chrono;
 
-// Use types from Solana/Agave
-use solana_lattice_hash::lt_hash::LtHash;
+use types::*;
+use utils::*;
 
 /// CLI arguments for the proof generator
 #[derive(Parser, Debug)]
@@ -32,111 +34,10 @@ struct Args {
     /// Output file for the proof package
     #[arg(short, long, default_value = "proof_package.json")]
     output: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ProofPackage {
-    start_slot: u64,
-    end_slot: u64,
-    account_pubkey: String,
-    slot_chain: Vec<SlotData>,
-    account_changes: Vec<AccountChange>,
-    vote_transactions: Vec<VoteTransaction>,
-    validation_results: ValidationResults,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SlotData {
-    slot: u64,
-    bank_hash: String,
-    parent_bank_hash: String,
-    signature_count: u64,
-    last_blockhash: String,
-    cumulative_lthash: Vec<u8>,
-    delta_lthash: Vec<u8>,
-    accounts_delta_hash: Option<String>,
-    accounts_lthash_checksum: Option<String>,
-    epoch_accounts_hash: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AccountChange {
-    slot: u64,
-    account_pubkey: String,
-    write_version: i64,
-    old_lamports: i64,
-    old_owner: String,
-    old_executable: bool,
-    old_rent_epoch: i64,
-    old_data: Vec<u8>,
-    old_lthash: Vec<u8>,
-    new_lamports: i64,
-    new_owner: String,
-    new_executable: bool,
-    new_rent_epoch: i64,
-    new_data: Vec<u8>,
-    new_lthash: Vec<u8>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ValidationResults {
-    chain_continuity: bool,
-    bank_hash_validation: Vec<BankHashValidation>,
-    lthash_validation: LtHashValidation,
-    checksum_validation: ChecksumValidation,
-    vote_signature_validation: Vec<VoteSignatureValidation>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BankHashValidation {
-    slot: u64,
-    expected_hash: String,
-    calculated_hash: String,
-    valid: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LtHashValidation {
-    previous_slot: u64,
-    last_slot: u64,
-    previous_cumulative_lthash: String,
-    calculated_new_lthash: String,
-    stored_new_lthash: String,
-    valid: bool,
-    details: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChecksumValidation {
-    slot: u64,
-    calculated_checksum: String,
-    stored_checksum: Option<String>,
-    valid: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VoteTransaction {
-    slot: u64,
-    voter_pubkey: String,
-    vote_signature: String,
-    vote_transaction: Vec<u8>,
-    transaction_meta: Option<serde_json::Value>,
-    vote_type: String,
-    vote_slot: Option<u64>,
-    vote_hash: Option<String>,
-    root_slot: Option<u64>,
-    lockouts_count: Option<u64>,
-    timestamp: Option<i64>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct VoteSignatureValidation {
-    slot: u64,
-    voter_pubkey: String,
-    vote_signature: String,
-    expected_signature: String,
-    valid: bool,
-    error: Option<String>,
+    
+    /// Output file for validation details (optional)
+    #[arg(long, default_value = "validation_details.log")]
+    validation_log: String,
 }
 
 #[tokio::main]
@@ -181,32 +82,84 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         proof_package.validation_results.vote_signature_validation.len()
     );
     
-    // Print LtHash validation details if it failed
-    if !proof_package.validation_results.lthash_validation.valid {
-        println!("\n=== LtHash Validation Details ===");
-        println!("{}", proof_package.validation_results.lthash_validation.details);
-        println!("=================================");
+    // Save validation details to separate file if validation failed
+    if !proof_package.validation_results.lthash_validation.valid || 
+       !proof_package.validation_results.checksum_validation.valid ||
+       !proof_package.validation_results.chain_continuity ||
+       proof_package.validation_results.vote_signature_validation.iter().any(|v| !v.valid) {
+        save_validation_details(&proof_package, &args.validation_log)?;
+        println!("\nValidation details saved to: {}", args.validation_log);
     }
     
-    // Print vote signature errors if any
+    println!("\nProof package saved to: {}", args.output);
+
+    Ok(())
+}
+
+/// Save validation details to a separate log file
+fn save_validation_details(proof_package: &ProofPackage, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    
+    let mut file = std::fs::File::create(file_path)?;
+    
+    writeln!(file, "=== Validation Details Report ===")?;
+    writeln!(file, "Generated at: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))?;
+    writeln!(file, "Start slot: {}", proof_package.start_slot)?;
+    writeln!(file, "End slot: {}", proof_package.end_slot)?;
+    writeln!(file, "Account: {}", proof_package.account_pubkey)?;
+    writeln!(file)?;
+    
+    writeln!(file, "=== Summary ===")?;
+    writeln!(file, "Chain continuity: {}", proof_package.validation_results.chain_continuity)?;
+    writeln!(file, "Bank hash validations: {}/{} valid", 
+        proof_package.validation_results.bank_hash_validation.iter().filter(|v| v.valid).count(),
+        proof_package.validation_results.bank_hash_validation.len()
+    )?;
+    writeln!(file, "LtHash validation: {}", proof_package.validation_results.lthash_validation.valid)?;
+    writeln!(file, "Checksum validation: {}", proof_package.validation_results.checksum_validation.valid)?;
+    writeln!(file, "Vote signature validations: {}/{} valid",
+        proof_package.validation_results.vote_signature_validation.iter().filter(|v| v.valid).count(),
+        proof_package.validation_results.vote_signature_validation.len()
+    )?;
+    writeln!(file)?;
+    
+    // Bank hash failures
+    let failed_bank_hashes: Vec<_> = proof_package.validation_results.bank_hash_validation
+        .iter()
+        .filter(|v| !v.valid)
+        .collect();
+    if !failed_bank_hashes.is_empty() {
+        writeln!(file, "=== Failed Bank Hash Validations ===")?;
+        for validation in failed_bank_hashes {
+            writeln!(file, "Slot {}: expected={}, calculated={}", 
+                validation.slot, validation.expected_hash, validation.calculated_hash)?;
+        }
+        writeln!(file)?;
+    }
+    
+    // LtHash validation details
+    if !proof_package.validation_results.lthash_validation.valid {
+        writeln!(file, "=== LtHash Validation Details ===")?;
+        writeln!(file, "{}", proof_package.validation_results.lthash_validation.details)?;
+        writeln!(file)?;
+    }
+    
+    // Vote signature failures
     let failed_votes: Vec<_> = proof_package.validation_results.vote_signature_validation
         .iter()
         .filter(|v| !v.valid)
         .collect();
     if !failed_votes.is_empty() {
-        println!("\n=== Failed Vote Signatures ===");
+        writeln!(file, "=== Failed Vote Signatures ===")?;
         for vote in failed_votes {
-            println!("Slot {}, Voter {}: {}", 
+            writeln!(file, "Slot {}, Voter {}: {}", 
                 vote.slot, 
                 vote.voter_pubkey,
                 vote.error.as_ref().unwrap_or(&"Unknown error".to_string())
-            );
+            )?;
         }
-        println!("==============================");
     }
     
-    println!("\nProof package saved to: {}", args.output);
-
     Ok(())
 }
 
@@ -217,7 +170,7 @@ async fn generate_proof_package(
 ) -> Result<ProofPackage, Box<dyn std::error::Error>> {
     let client = pool.get().await?;
 
-    // 1. Find the last slot where the account changed
+    // Find the last slot where the account changed
     let last_slot_query = r#"
         SELECT MAX(slot) as last_slot
         FROM account_changes
@@ -234,7 +187,7 @@ async fn generate_proof_package(
 
     info!("Found last account change at slot {}", end_slot);
 
-    // 2. Fetch complete slot chain from start to end
+    // Fetch complete slot chain from start to end
     let slots_query = r#"
         SELECT 
             slot, bank_hash, parent_bank_hash, signature_count, last_blockhash,
@@ -269,7 +222,7 @@ async fn generate_proof_package(
         return Err("No slots found in the specified range".into());
     }
 
-    // 3. Fetch all account changes for the last slot
+    // Fetch all account changes for the last slot
     let changes_query = r#"
         SELECT 
             slot, account_pubkey, write_version,
@@ -303,7 +256,7 @@ async fn generate_proof_package(
         });
     }
 
-    // 4. Fetch vote transactions for the last slot
+    // Fetch vote transactions for the last slot
     let votes_query = r#"
         SELECT 
             slot, voter_pubkey, vote_signature, vote_transaction, transaction_meta,
@@ -334,7 +287,7 @@ async fn generate_proof_package(
 
     info!("Found {} vote transactions for slot {}", vote_transactions.len(), end_slot);
 
-    // 5. Validate the proof package
+    // Validate the proof package
     let validation_results = validate_proof_package(&slot_chain, &account_changes, &vote_transactions, &account_pubkey.to_string());
 
     Ok(ProofPackage {
@@ -354,26 +307,13 @@ fn validate_proof_package(
     vote_transactions: &[VoteTransaction],
     target_pubkey: &str,
 ) -> ValidationResults {
-    // 1. Check chain continuity
-    let mut chain_continuity = true;
-    for i in 1..slot_chain.len() {
-        let prev_slot = &slot_chain[i - 1];
-        let curr_slot = &slot_chain[i];
-        
-        // Check if current slot's parent_bank_hash matches previous slot's bank_hash
-        if curr_slot.parent_bank_hash != prev_slot.bank_hash {
-            warn!(
-                "Chain break at slot {}: parent_bank_hash {} doesn't match previous bank_hash {}",
-                curr_slot.slot, curr_slot.parent_bank_hash, prev_slot.bank_hash
-            );
-            chain_continuity = false;
-        }
-    }
+    // Check chain continuity
+    let chain_continuity = validate_chain_continuity(slot_chain);
 
-    // 2. Validate bank hashes
+    // Validate bank hashes
     let bank_hash_validation = validate_bank_hashes(slot_chain);
 
-    // 3. Validate LtHash transformation
+    // Validate LtHash transformation
     let lthash_validation = if slot_chain.len() >= 2 && !account_changes.is_empty() {
         validate_lthash_transformation(
             &slot_chain[slot_chain.len() - 2],
@@ -393,7 +333,7 @@ fn validate_proof_package(
         }
     };
 
-    // 4. Validate checksum
+    // Validate checksum
     let checksum_validation = if let Some(last_slot) = slot_chain.last() {
         validate_checksum(last_slot)
     } else {
@@ -405,7 +345,7 @@ fn validate_proof_package(
         }
     };
 
-    // 5. Validate vote signatures
+    // Validate vote signatures
     let vote_signature_validation = validate_vote_signatures(vote_transactions);
 
     ValidationResults {
@@ -417,98 +357,58 @@ fn validate_proof_package(
     }
 }
 
-fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
-    let mut validations = Vec::new();
-
-    for slot in slot_chain {
-        // Calculate bank hash exactly as Solana does
-        let mut calculated_hash;
+/// Validate chain continuity
+fn validate_chain_continuity(slot_chain: &[SlotData]) -> bool {
+    for i in 1..slot_chain.len() {
+        let prev_slot = &slot_chain[i - 1];
+        let curr_slot = &slot_chain[i];
         
-        // Parse the parent bank hash
-        let parent_hash = match Hash::from_str(&slot.parent_bank_hash) {
-            Ok(h) => h,
-            Err(e) => {
-                warn!("Failed to parse parent_bank_hash for slot {}: {}", slot.slot, e);
-                validations.push(BankHashValidation {
-                    slot: slot.slot,
-                    expected_hash: slot.bank_hash.clone(),
-                    calculated_hash: "Error".to_string(),
-                    valid: false,
-                });
-                continue;
-            }
-        };
-
-        // Step 1: Base hash with parent, signature count, and last blockhash
-        // We're in the post-LtHash world, so we use hashv with these components
-        let signature_count_bytes = slot.signature_count.to_le_bytes();
-        
-        let last_blockhash = match Hash::from_str(&slot.last_blockhash) {
-            Ok(h) => h,
-            Err(e) => {
-                warn!("Failed to parse last_blockhash for slot {}: {}", slot.slot, e);
-                validations.push(BankHashValidation {
-                    slot: slot.slot,
-                    expected_hash: slot.bank_hash.clone(),
-                    calculated_hash: "Error".to_string(),
-                    valid: false,
-                });
-                continue;
-            }
-        };
-
-        // For post-LtHash era:
-        // Step 1: Base hash without accounts hash
-        calculated_hash = solana_sdk::hash::hashv(&[
-            parent_hash.as_ref(),
-            &signature_count_bytes,
-            last_blockhash.as_ref(),
-        ]);
-
-        // Step 2: Add the cumulative LtHash bytes (not the checksum!)
-        // The LtHash bytes should be in cumulative_lthash field
-        if !slot.cumulative_lthash.is_empty() {
-            // The cumulative_lthash contains the raw LtHash bytes
-            calculated_hash = solana_sdk::hash::hashv(&[
-                calculated_hash.as_ref(),
-                &slot.cumulative_lthash,
-            ]);
-        } else {
-            warn!("Missing cumulative_lthash for slot {}", slot.slot);
-            validations.push(BankHashValidation {
-                slot: slot.slot,
-                expected_hash: slot.bank_hash.clone(),
-                calculated_hash: "Error".to_string(),
-                valid: false,
-            });
-            continue;
+        if curr_slot.parent_bank_hash != prev_slot.bank_hash {
+            warn!(
+                "Chain break at slot {}: parent_bank_hash {} doesn't match previous bank_hash {}",
+                curr_slot.slot, curr_slot.parent_bank_hash, prev_slot.bank_hash
+            );
+            return false;
         }
+    }
+    true
+}
+
+/// Validate bank hashes for the slot chain
+fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
+    slot_chain.iter().map(|slot| {
+        let calculated_hash = match calculate_bank_hash(
+            &slot.parent_bank_hash,
+            &slot.last_blockhash,
+            slot.signature_count,
+            &slot.cumulative_lthash,
+        ) {
+            Ok(hash) => hash.to_string(),
+            Err(e) => {
+                warn!("Failed to calculate bank hash for slot {}: {}", slot.slot, e);
+                "Error".to_string()
+            }
+        };
         
-        let valid = calculated_hash.to_string() == slot.bank_hash;
+        let valid = calculated_hash == slot.bank_hash;
         
         if !valid {
             warn!(
                 "Bank hash mismatch at slot {}: expected {}, calculated {}",
                 slot.slot, slot.bank_hash, calculated_hash
             );
-            warn!(
-                "  Components: parent_bank_hash={}, signature_count={}, last_blockhash={}, accounts_lthash_checksum={:?}, epoch_accounts_hash={:?}",
-                slot.parent_bank_hash, slot.signature_count, slot.last_blockhash, 
-                slot.accounts_lthash_checksum, slot.epoch_accounts_hash
-            );
         }
 
-        validations.push(BankHashValidation {
+        BankHashValidation {
             slot: slot.slot,
             expected_hash: slot.bank_hash.clone(),
-            calculated_hash: calculated_hash.to_string(),
+            calculated_hash,
             valid,
-        });
-    }
-
-    validations
+        }
+    }).collect()
 }
 
+/// Validate LtHash transformation between two slots
 fn validate_lthash_transformation(
     prev_slot: &SlotData,
     last_slot: &SlotData,
@@ -517,126 +417,65 @@ fn validate_lthash_transformation(
 ) -> LtHashValidation {
     let mut details = String::new();
     
-    // Split changes into monitored and other accounts
-    let mut monitored_changes = Vec::new();
-    let mut other_changes = Vec::new();
-    
-    for change in account_changes {
-        if change.account_pubkey == target_pubkey {
-            monitored_changes.push(change);
-        } else {
-            other_changes.push(change);
-        }
-    }
+    // Count monitored vs other accounts
+    let monitored_count = account_changes.iter()
+        .filter(|c| c.account_pubkey == target_pubkey)
+        .count();
+    let other_count = account_changes.len() - monitored_count;
     
     details.push_str(&format!(
         "Found {} changes for monitored account, {} other changes\n",
-        monitored_changes.len(),
-        other_changes.len()
+        monitored_count, other_count
     ));
     
     // Parse LtHashes
-    let prev_cumulative = match parse_lthash(&prev_slot.cumulative_lthash) {
-        Ok(h) => h,
-        Err(e) => {
+    let (prev_cumulative, stored_cumulative, stored_delta) = match (
+        parse_lthash(&prev_slot.cumulative_lthash),
+        parse_lthash(&last_slot.cumulative_lthash),
+        parse_lthash(&last_slot.delta_lthash),
+    ) {
+        (Ok(prev), Ok(curr), Ok(delta)) => (prev, curr, delta),
+        (Err(e), _, _) => {
             details.push_str(&format!("Failed to parse previous cumulative LtHash: {}\n", e));
-            return LtHashValidation {
-                previous_slot: prev_slot.slot,
-                last_slot: last_slot.slot,
-                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                calculated_new_lthash: "Error".to_string(),
-                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                valid: false,
-                details,
-            };
+            return create_error_validation(prev_slot.slot, last_slot.slot, details);
+        }
+        (_, Err(e), _) => {
+            details.push_str(&format!("Failed to parse current cumulative LtHash: {}\n", e));
+            return create_error_validation(prev_slot.slot, last_slot.slot, details);
+        }
+        (_, _, Err(e)) => {
+            details.push_str(&format!("Failed to parse delta LtHash: {}\n", e));
+            return create_error_validation(prev_slot.slot, last_slot.slot, details);
         }
     };
     
-    let stored_cumulative = match parse_lthash(&last_slot.cumulative_lthash) {
-        Ok(h) => h,
-        Err(e) => {
-            details.push_str(&format!("Failed to parse stored cumulative LtHash: {}\n", e));
-            return LtHashValidation {
-                previous_slot: prev_slot.slot,
-                last_slot: last_slot.slot,
-                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                calculated_new_lthash: "Error".to_string(),
-                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                valid: false,
-                details,
-            };
-        }
-    };
-    
-    // Parse the stored delta LtHash
-    let stored_delta = match parse_lthash(&last_slot.delta_lthash) {
-        Ok(h) => h,
-        Err(e) => {
-            details.push_str(&format!("Failed to parse stored delta LtHash: {}\n", e));
-            return LtHashValidation {
-                previous_slot: prev_slot.slot,
-                last_slot: last_slot.slot,
-                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                calculated_new_lthash: "Error".to_string(),
-                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                valid: false,
-                details,
-            };
-        }
-    };
-    
-    // First, let's verify if prev_cumulative + stored_delta = stored_cumulative
+    // Verify stored data consistency
     let mut test_cumulative = prev_cumulative.clone();
     test_cumulative.mix_in(&stored_delta);
-    let delta_check_matches = test_cumulative == stored_cumulative;
-    
-    let delta_check_msg = format!(
-        "Delta check: prev_cumulative + stored_delta {} stored_cumulative (prev + delta = {}, stored = {})",
-        if delta_check_matches { "==" } else { "!=" },
-        &format_lthash(&test_cumulative)[..32],
-        &format_lthash(&stored_cumulative)[..32]
-    );
-    if !delta_check_matches {
-        warn!("{}", delta_check_msg);
+    if test_cumulative != stored_cumulative {
+        warn!("Stored LtHash data inconsistent: prev + delta != cumulative");
+        details.push_str("ERROR: Stored data inconsistency detected\n");
     }
-    info!("{}", delta_check_msg);
-    details.push_str(&format!("{}\n", delta_check_msg));
     
-    // Start with previous cumulative LtHash
+    // Calculate cumulative from account changes
     let mut calculated_cumulative = prev_cumulative.clone();
-    let start_msg = format!("Starting LtHash validation: prev_slot={}, last_slot={}", prev_slot.slot, last_slot.slot);
-    info!("{}", start_msg);
-    details.push_str(&format!("{}\n", start_msg));
-    details.push_str(&format!("Starting with previous cumulative: {}\n", &format_lthash(&calculated_cumulative)[..32]));
-    details.push_str(&format!("Stored delta: {}\n", &format_lthash(&stored_delta)[..32]));
-    details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
-    
-    // Let's also check the first few bytes in detail
-    info!("Previous cumulative first 16 bytes: {:02x?}", &prev_slot.cumulative_lthash[..16]);
-    info!("Stored cumulative first 16 bytes: {:02x?}", &last_slot.cumulative_lthash[..16]);
-    info!("Stored delta first 16 bytes: {:02x?}", &last_slot.delta_lthash[..16]);
-    
-    // Apply all account changes: mix out old, mix in new
     let mut mismatch_count = 0;
-    for (idx, change) in account_changes.iter().enumerate() {
-        // First, calculate the LtHash ourselves and verify it matches stored
+    
+    for change in account_changes {
         let pubkey = match Pubkey::from_str(&change.account_pubkey) {
             Ok(pk) => pk,
             Err(e) => {
-                details.push_str(&format!(
-                    "Failed to parse pubkey {}: {}\n",
-                    change.account_pubkey, e
-                ));
+                details.push_str(&format!("Failed to parse pubkey {}: {}\n", change.account_pubkey, e));
                 continue;
             }
         };
         
-        // Handle potential negative lamports by treating them as 0
+        // Handle negative lamports
         let old_lamports = if change.old_lamports < 0 { 0 } else { change.old_lamports as u64 };
         let new_lamports = if change.new_lamports < 0 { 0 } else { change.new_lamports as u64 };
         
-        // Calculate old account LtHash
-        let calculated_old_lt = calculate_account_lthash(
+        // Calculate and verify account LtHashes
+        let calculated_old = calculate_account_lthash(
             old_lamports,
             change.old_rent_epoch as u64,
             &change.old_data,
@@ -645,8 +484,7 @@ fn validate_lthash_transformation(
             &pubkey,
         );
         
-        // Calculate new account LtHash
-        let calculated_new_lt = calculate_account_lthash(
+        let calculated_new = calculate_account_lthash(
             new_lamports,
             change.new_rent_epoch as u64,
             &change.new_data,
@@ -656,181 +494,53 @@ fn validate_lthash_transformation(
         );
         
         match (parse_lthash(&change.old_lthash), parse_lthash(&change.new_lthash)) {
-            (Ok(stored_old_lt), Ok(stored_new_lt)) => {
-                // Verify our calculated LtHash matches the stored one
-                let old_matches = calculated_old_lt == stored_old_lt;
-                let new_matches = calculated_new_lt == stored_new_lt;
-                
-                if !old_matches || !new_matches {
+            (Ok(stored_old), Ok(stored_new)) => {
+                // Check if our calculations match stored values
+                if calculated_old != stored_old || calculated_new != stored_new {
                     mismatch_count += 1;
-                    let mismatch_msg = format!(
-                        "[{}] LtHash mismatch for account {} ({}): old_matches={}, new_matches={}",
-                        idx, &change.account_pubkey[..8], &change.account_pubkey, old_matches, new_matches
-                    );
-                    warn!("{}", mismatch_msg);
-                    details.push_str(&format!("\n{}\n", mismatch_msg));
-                    
-                    if !old_matches {
-                        let old_msg = format!(
-                            "  Old: calculated={}, stored={}",
-                            &format_lthash(&calculated_old_lt)[..32],
-                            &format_lthash(&stored_old_lt)[..32]
-                        );
-                        warn!("{}", old_msg);
-                        details.push_str(&format!("{}\n", old_msg));
-                        
-                        let old_details = format!(
-                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}",
-                            change.old_data.len(), old_lamports, change.old_lamports, change.old_owner, change.old_executable, change.old_rent_epoch
-                        );
-                        warn!("{}", old_details);
-                        details.push_str(&format!("{}\n", old_details));
+                    if mismatch_count <= 5 { // Only log first 5 mismatches
+                        details.push_str(&format!(
+                            "LtHash mismatch for account {}: old={}, new={}\n",
+                            &change.account_pubkey[..8],
+                            calculated_old == stored_old,
+                            calculated_new == stored_new
+                        ));
                     }
-                    if !new_matches {
-                        let new_msg = format!(
-                            "  New: calculated={}, stored={}",
-                            &format_lthash(&calculated_new_lt)[..32],
-                            &format_lthash(&stored_new_lt)[..32]
-                        );
-                        warn!("{}", new_msg);
-                        details.push_str(&format!("{}\n", new_msg));
-                        
-                        let new_details = format!(
-                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}",
-                            change.new_data.len(), new_lamports, change.new_lamports, change.new_owner, change.new_executable, change.new_rent_epoch
-                        );
-                        warn!("{}", new_details);
-                        details.push_str(&format!("{}\n", new_details));
-                    }
-                    
-                    // Show cumulative state after this account
-                    let mut test_cumulative = calculated_cumulative.clone();
-                    test_cumulative.mix_out(&stored_old_lt);
-                    test_cumulative.mix_in(&stored_new_lt);
-                    let cumulative_msg = format!(
-                        "  Cumulative after this account: {}",
-                        &format_lthash(&test_cumulative)[..32]
-                    );
-                    warn!("{}", cumulative_msg);
-                    details.push_str(&format!("{}\n", cumulative_msg));
                 }
                 
-                // Use the stored values for cumulative calculation
-                calculated_cumulative.mix_out(&stored_old_lt);
-                calculated_cumulative.mix_in(&stored_new_lt);
-                
-                if change.account_pubkey == target_pubkey {
-                    let monitored_msg = format!(
-                        "Monitored account {}: applied change (verified: old={}, new={})",
-                        &change.account_pubkey[..8], old_matches, new_matches
-                    );
-                    info!("{}", monitored_msg);
-                    details.push_str(&format!("\n{}\n", monitored_msg));
-                    
-                    // Log the actual LtHash values for the monitored account
-                    info!("  Old LtHash: {} (first 32 chars of {})", &format_lthash(&stored_old_lt)[..32], format_lthash(&stored_old_lt).len());
-                    info!("  New LtHash: {} (first 32 chars of {})", &format_lthash(&stored_new_lt)[..32], format_lthash(&stored_new_lt).len());
-                    info!("  Cumulative after: {}", &format_lthash(&calculated_cumulative)[..32]);
-                }
+                // Apply the transformation
+                calculated_cumulative.mix_out(&stored_old);
+                calculated_cumulative.mix_in(&stored_new);
             }
-            (Err(e1), _) => {
+            _ => {
                 details.push_str(&format!(
-                    "Failed to parse old LtHash for account {}: {}\n",
-                    change.account_pubkey, e1
+                    "Failed to parse LtHash for account {}\n",
+                    change.account_pubkey
                 ));
-                return LtHashValidation {
-                    previous_slot: prev_slot.slot,
-                    last_slot: last_slot.slot,
-                    previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                    calculated_new_lthash: "Error".to_string(),
-                    stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                    valid: false,
-                    details,
-                };
-            }
-            (_, Err(e2)) => {
-                details.push_str(&format!(
-                    "Failed to parse new LtHash for account {}: {}\n",
-                    change.account_pubkey, e2
-                ));
-                return LtHashValidation {
-                    previous_slot: prev_slot.slot,
-                    last_slot: last_slot.slot,
-                    previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-                    calculated_new_lthash: "Error".to_string(),
-                    stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
-                    valid: false,
-                    details,
-                };
             }
         }
     }
     
-    // Calculate what our delta is
-    let mut calculated_delta = LtHash::identity();
-    calculated_delta.mix_in(&calculated_cumulative);
-    calculated_delta.mix_out(&prev_cumulative);
-    
-    let delta_comparison = format!(
-        "Delta comparison: calculated_delta={}, stored_delta={}",
-        &format_lthash(&calculated_delta)[..32],
-        &format_lthash(&stored_delta)[..32]
-    );
-    info!("{}", delta_comparison);
-    details.push_str(&format!("\n{}\n", delta_comparison));
-    
-    // Add summary of mismatches
-    if mismatch_count > 0 {
-        let summary = format!("SUMMARY: Found {} account LtHash mismatches out of {} total accounts", mismatch_count, account_changes.len());
-        warn!("{}", summary);
-        details.push_str(&format!("\n\n{}\n", summary));
+    if mismatch_count > 5 {
+        details.push_str(&format!("... and {} more mismatches\n", mismatch_count - 5));
     }
     
-    // Now check if our calculated cumulative matches the stored one
-    let cumulative_matches = calculated_cumulative == stored_cumulative;
-    let final_msg = format!(
-        "Final cumulative verification: {} (calculated: {}, stored: {})",
-        if cumulative_matches { "MATCHES" } else { "MISMATCH" },
-        &format_lthash(&calculated_cumulative)[..32],
-        &format_lthash(&stored_cumulative)[..32]
-    );
-    if !cumulative_matches {
-        warn!("{}", final_msg);
-    }
-    details.push_str(&format!("\n{}\n", final_msg));
+    // Verify final cumulative
+    let valid = calculated_cumulative == stored_cumulative;
     
-    // Also verify the checksum
+    // Calculate checksum
     let calculated_checksum = calculated_cumulative.checksum();
-    let checksum_matches = if let Some(stored_checksum_str) = &last_slot.accounts_lthash_checksum {
-        let matches = calculated_checksum.to_string() == *stored_checksum_str;
-        let checksum_msg = format!(
-            "Checksum verification: {} (calculated: {}, stored: {})",
-            if matches { "MATCHES" } else { "MISMATCH" },
-            calculated_checksum,
-            stored_checksum_str
-        );
-        if !matches {
-            warn!("{}", checksum_msg);
-        }
-        details.push_str(&format!("{}\n", checksum_msg));
-        matches
+    let checksum_valid = if let Some(stored_checksum_str) = &last_slot.accounts_lthash_checksum {
+        calculated_checksum.to_string() == *stored_checksum_str
     } else {
-        details.push_str("No stored checksum to verify\n");
-        false
+        true // No checksum to verify
     };
     
-    // Overall validation passes if cumulative and checksum match
-    let valid = cumulative_matches && checksum_matches;
-    
-    if !valid {
-        details.push_str("LtHash validation FAILED!\n");
-        details.push_str(&format!(
-            "Summary: cumulative_matches={}, checksum_matches={}\n",
-            cumulative_matches, checksum_matches
-        ));
-    } else {
-        details.push_str("LtHash validation SUCCESSFUL! All checks passed.\n");
-    }
+    details.push_str(&format!(
+        "\nValidation result: cumulative={}, checksum={}\n",
+        if valid { "PASS" } else { "FAIL" },
+        if checksum_valid { "PASS" } else { "FAIL" }
+    ));
     
     LtHashValidation {
         previous_slot: prev_slot.slot,
@@ -838,50 +548,35 @@ fn validate_lthash_transformation(
         previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
         calculated_new_lthash: format_lthash(&calculated_cumulative),
         stored_new_lthash: format_lthash(&stored_cumulative),
-        valid,
+        valid: valid && checksum_valid,
         details,
     }
 }
 
-fn parse_lthash(bytes: &[u8]) -> Result<LtHash, String> {
-    if bytes.len() != 2048 {
-        return Err(format!("Invalid LtHash length: expected 2048, got {}", bytes.len()));
+/// Create an error validation result
+fn create_error_validation(prev_slot: u64, last_slot: u64, details: String) -> LtHashValidation {
+    LtHashValidation {
+        previous_slot: prev_slot,
+        last_slot,
+        previous_cumulative_lthash: String::new(),
+        calculated_new_lthash: "Error".to_string(),
+        stored_new_lthash: String::new(),
+        valid: false,
+        details,
     }
-    
-    let mut arr = [0u16; LtHash::NUM_ELEMENTS];
-    for i in 0..LtHash::NUM_ELEMENTS {
-        arr[i] = u16::from_le_bytes(
-            bytes[i * 2..(i + 1) * 2]
-                .try_into()
-                .map_err(|_| "Failed to convert bytes")?
-        );
-    }
-    
-    Ok(LtHash(arr))
 }
 
-fn format_lthash(lthash: &LtHash) -> String {
-    // Convert LtHash to bytes and encode as hex
-    let mut bytes = Vec::with_capacity(2048);
-    for &val in &lthash.0 {
-        bytes.extend_from_slice(&val.to_le_bytes());
-    }
-    hex::encode(&bytes)
-}
-
+/// Validate checksum for a slot
 fn validate_checksum(slot: &SlotData) -> ChecksumValidation {
-    // Parse the LtHash first
     match parse_lthash(&slot.cumulative_lthash) {
         Ok(lthash) => {
-            // Calculate checksum from LtHash
             let checksum = lthash.checksum();
             let calculated_checksum = checksum.to_string();
             
             let valid = if let Some(stored) = &slot.accounts_lthash_checksum {
                 &calculated_checksum == stored
             } else {
-                // No checksum stored (pre-LtHash fork)
-                true
+                true // No checksum stored
             };
             
             ChecksumValidation {
@@ -903,104 +598,62 @@ fn validate_checksum(slot: &SlotData) -> ChecksumValidation {
     }
 }
 
+/// Validate vote signatures
 fn validate_vote_signatures(vote_transactions: &[VoteTransaction]) -> Vec<VoteSignatureValidation> {
-    let mut validations = Vec::new();
-
-    for vote_tx in vote_transactions {
-        let mut valid = false;
-        let mut error = None;
-        let mut expected_signature = String::new();
-
-        // Deserialize the transaction
+    vote_transactions.iter().map(|vote_tx| {
         match bincode::deserialize::<Transaction>(&vote_tx.vote_transaction) {
             Ok(transaction) => {
-                // Get the first signature (the payer/voter signature)
                 if let Some(sig) = transaction.signatures.first() {
-                    expected_signature = sig.to_string();
+                    let expected_signature = sig.to_string();
                     
-                    // Compare with stored signature
                     if expected_signature == vote_tx.vote_signature {
-                        // Verify the signature against the transaction message
                         match transaction.verify() {
-                            Ok(_) => {
-                                valid = true;
-                            }
-                            Err(e) => {
-                                error = Some(format!("Signature verification failed: {:?}", e));
+                            Ok(_) => VoteSignatureValidation {
+                                slot: vote_tx.slot,
+                                voter_pubkey: vote_tx.voter_pubkey.clone(),
+                                vote_signature: vote_tx.vote_signature.clone(),
+                                expected_signature,
+                                valid: true,
+                                error: None,
+                            },
+                            Err(e) => VoteSignatureValidation {
+                                slot: vote_tx.slot,
+                                voter_pubkey: vote_tx.voter_pubkey.clone(),
+                                vote_signature: vote_tx.vote_signature.clone(),
+                                expected_signature,
+                                valid: false,
+                                error: Some(format!("Signature verification failed: {:?}", e)),
                             }
                         }
                     } else {
-                        error = Some(format!(
-                            "Signature mismatch: expected {}, got {}",
-                            expected_signature, vote_tx.vote_signature
-                        ));
+                        VoteSignatureValidation {
+                            slot: vote_tx.slot,
+                            voter_pubkey: vote_tx.voter_pubkey.clone(),
+                            vote_signature: vote_tx.vote_signature.clone(),
+                            expected_signature,
+                            valid: false,
+                            error: Some("Signature mismatch".to_string()),
+                        }
                     }
                 } else {
-                    error = Some("No signatures found in transaction".to_string());
+                    VoteSignatureValidation {
+                        slot: vote_tx.slot,
+                        voter_pubkey: vote_tx.voter_pubkey.clone(),
+                        vote_signature: vote_tx.vote_signature.clone(),
+                        expected_signature: String::new(),
+                        valid: false,
+                        error: Some("No signatures in transaction".to_string()),
+                    }
                 }
             }
-            Err(e) => {
-                error = Some(format!("Failed to deserialize transaction: {}", e));
+            Err(e) => VoteSignatureValidation {
+                slot: vote_tx.slot,
+                voter_pubkey: vote_tx.voter_pubkey.clone(),
+                vote_signature: vote_tx.vote_signature.clone(),
+                expected_signature: String::new(),
+                valid: false,
+                error: Some(format!("Failed to deserialize transaction: {}", e)),
             }
         }
-
-        validations.push(VoteSignatureValidation {
-            slot: vote_tx.slot,
-            voter_pubkey: vote_tx.voter_pubkey.clone(),
-            vote_signature: vote_tx.vote_signature.clone(),
-            expected_signature,
-            valid,
-            error,
-        });
-    }
-
-    validations
-}
-
-fn calculate_account_lthash(
-    lamports: u64,
-    _rent_epoch: u64,
-    data: &[u8],
-    executable: bool,
-    owner: &str,
-    pubkey: &Pubkey,
-) -> LtHash {
-    // Handle zero-lamport accounts
-    if lamports == 0 {
-        // Zero lamport accounts have identity LtHash
-        return LtHash::identity();
-    }
-    
-    // Parse owner pubkey
-    let owner_pubkey = match Pubkey::from_str(owner) {
-        Ok(pk) => pk,
-        Err(_) => {
-            warn!("Failed to parse owner pubkey: {}", owner);
-            return LtHash::identity();
-        }
-    };
-    
-    // Create blake3 hasher and hash account components in the exact order Solana uses
-    let mut hasher = blake3::Hasher::new();
-    
-    // 1. Hash lamports (8 bytes, little-endian)
-    hasher.update(&lamports.to_le_bytes());
-    
-    // 2. For LtHash, rent_epoch is excluded (RentEpochInAccountHash::Excluded)
-    // So we skip rent_epoch
-    
-    // 3. Hash account data
-    hasher.update(data);
-    
-    // 4. Hash executable flag (1 byte: 1 if true, 0 if false)
-    hasher.update(&[if executable { 1u8 } else { 0u8 }]);
-    
-    // 5. Hash owner pubkey (32 bytes)
-    hasher.update(owner_pubkey.as_ref());
-    
-    // 6. Hash account pubkey (32 bytes)
-    hasher.update(pubkey.as_ref());
-    
-    // Generate LtHash from the hasher
-    LtHash::with(&hasher)
+    }).collect()
 }
