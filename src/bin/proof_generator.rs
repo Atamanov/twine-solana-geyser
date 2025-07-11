@@ -3,7 +3,7 @@ use deadpool_postgres::{Config as DbConfig, Pool, Runtime as DbRuntime};
 use log::*;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
-    hash::{Hash, Hasher},
+    hash::Hash,
     pubkey::Pubkey,
     transaction::Transaction,
 };
@@ -542,19 +542,21 @@ fn validate_lthash_transformation(
         }
     };
     
-    // Start with previous cumulative
-    let mut calculated = prev_cumulative;
+    // Always calculate delta from individual account changes for verification
+    details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
     
-    // Process all account changes
+    // Step 1: Calculate delta from individual changes
+    let mut calculated_delta = LtHash::identity();
+    
     for change in account_changes {
-        // Parse old and new LtHashes
         match (parse_lthash(&change.old_lthash), parse_lthash(&change.new_lthash)) {
             (Ok(old_lt), Ok(new_lt)) => {
-                // Subtract old, add new
-                calculated.mix_out(&old_lt);
-                calculated.mix_in(&new_lt);
+                // Delta = sum(new) - sum(old)
+                // In LtHash: mix_in(new), mix_out(old)
+                calculated_delta.mix_in(&new_lt);
+                calculated_delta.mix_out(&old_lt);
                 details.push_str(&format!(
-                    "Account {}: subtracted old LtHash, added new LtHash\n",
+                    "Account {}: mixed in new, mixed out old\n",
                     &change.account_pubkey[..8]
                 ));
             }
@@ -563,34 +565,106 @@ fn validate_lthash_transformation(
                     "Failed to parse old LtHash for account {}: {}\n",
                     change.account_pubkey, e1
                 ));
+                return LtHashValidation {
+                    previous_slot: prev_slot.slot,
+                    last_slot: last_slot.slot,
+                    previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
+                    calculated_new_lthash: "Error".to_string(),
+                    stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
+                    valid: false,
+                    details,
+                };
             }
             (_, Err(e2)) => {
                 details.push_str(&format!(
                     "Failed to parse new LtHash for account {}: {}\n",
                     change.account_pubkey, e2
                 ));
+                return LtHashValidation {
+                    previous_slot: prev_slot.slot,
+                    last_slot: last_slot.slot,
+                    previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
+                    calculated_new_lthash: "Error".to_string(),
+                    stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
+                    valid: false,
+                    details,
+                };
             }
         }
     }
     
-    // Compare calculated with stored
-    let valid = calculated == stored_cumulative;
+    // Step 2: Verify calculated delta matches stored delta
+    let stored_delta = match parse_lthash(&last_slot.delta_lthash) {
+        Ok(d) => d,
+        Err(e) => {
+            details.push_str(&format!("Failed to parse stored delta_lthash: {}\n", e));
+            return LtHashValidation {
+                previous_slot: prev_slot.slot,
+                last_slot: last_slot.slot,
+                previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
+                calculated_new_lthash: "Error".to_string(),
+                stored_new_lthash: hex::encode(&last_slot.cumulative_lthash),
+                valid: false,
+                details,
+            };
+        }
+    };
+    
+    let delta_matches = calculated_delta == stored_delta;
+    details.push_str(&format!(
+        "Delta verification: {} (calculated: {}, stored: {})\n",
+        if delta_matches { "MATCHES" } else { "MISMATCH" },
+        &format_lthash(&calculated_delta)[..32],
+        &format_lthash(&stored_delta)[..32]
+    ));
+    
+    // Step 3: Apply delta to previous cumulative
+    let mut calculated_cumulative = prev_cumulative.clone();
+    calculated_cumulative.mix_in(&stored_delta);
+    
+    // Step 4: Verify new cumulative matches stored
+    let cumulative_matches = calculated_cumulative == stored_cumulative;
+    details.push_str(&format!(
+        "Cumulative verification: {} (calculated: {}, stored: {})\n",
+        if cumulative_matches { "MATCHES" } else { "MISMATCH" },
+        &format_lthash(&calculated_cumulative)[..32],
+        &format_lthash(&stored_cumulative)[..32]
+    ));
+    
+    // Step 5: Verify checksum
+    let calculated_checksum = calculated_cumulative.checksum();
+    let checksum_matches = if let Some(stored_checksum_str) = &last_slot.accounts_lthash_checksum {
+        let matches = calculated_checksum.to_string() == *stored_checksum_str;
+        details.push_str(&format!(
+            "Checksum verification: {} (calculated: {}, stored: {})\n",
+            if matches { "MATCHES" } else { "MISMATCH" },
+            calculated_checksum,
+            stored_checksum_str
+        ));
+        matches
+    } else {
+        details.push_str("No stored checksum to verify\n");
+        false
+    };
+    
+    // Overall validation passes if all checks pass
+    let valid = delta_matches && cumulative_matches && checksum_matches;
     
     if !valid {
+        details.push_str("LtHash validation FAILED!\n");
         details.push_str(&format!(
-            "LtHash mismatch!\nCalculated: {:?}\nStored: {:?}\n",
-            format_lthash(&calculated),
-            format_lthash(&stored_cumulative)
+            "Summary: delta_matches={}, cumulative_matches={}, checksum_matches={}\n",
+            delta_matches, cumulative_matches, checksum_matches
         ));
     } else {
-        details.push_str("LtHash validation successful!\n");
+        details.push_str("LtHash validation SUCCESSFUL! All checks passed.\n");
     }
     
     LtHashValidation {
         previous_slot: prev_slot.slot,
         last_slot: last_slot.slot,
         previous_cumulative_lthash: hex::encode(&prev_slot.cumulative_lthash),
-        calculated_new_lthash: format_lthash(&calculated),
+        calculated_new_lthash: format_lthash(&calculated_cumulative),
         stored_new_lthash: format_lthash(&stored_cumulative),
         valid,
         details,
