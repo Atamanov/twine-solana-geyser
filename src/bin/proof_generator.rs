@@ -575,17 +575,73 @@ fn validate_lthash_transformation(
     
     // Apply all account changes: mix out old, mix in new
     for change in account_changes {
+        // First, calculate the LtHash ourselves and verify it matches stored
+        let pubkey = match Pubkey::from_str(&change.account_pubkey) {
+            Ok(pk) => pk,
+            Err(e) => {
+                details.push_str(&format!(
+                    "Failed to parse pubkey {}: {}\n",
+                    change.account_pubkey, e
+                ));
+                continue;
+            }
+        };
+        
+        // Calculate old account LtHash
+        let calculated_old_lt = calculate_account_lthash(
+            change.old_lamports as u64,
+            change.old_rent_epoch as u64,
+            &change.old_data,
+            change.old_executable,
+            &change.old_owner,
+            &pubkey,
+        );
+        
+        // Calculate new account LtHash
+        let calculated_new_lt = calculate_account_lthash(
+            change.new_lamports as u64,
+            change.new_rent_epoch as u64,
+            &change.new_data,
+            change.new_executable,
+            &change.new_owner,
+            &pubkey,
+        );
+        
         match (parse_lthash(&change.old_lthash), parse_lthash(&change.new_lthash)) {
-            (Ok(old_lt), Ok(new_lt)) => {
-                // Remove old account state
-                calculated_cumulative.mix_out(&old_lt);
-                // Add new account state
-                calculated_cumulative.mix_in(&new_lt);
+            (Ok(stored_old_lt), Ok(stored_new_lt)) => {
+                // Verify our calculated LtHash matches the stored one
+                let old_matches = calculated_old_lt == stored_old_lt;
+                let new_matches = calculated_new_lt == stored_new_lt;
+                
+                if !old_matches || !new_matches {
+                    details.push_str(&format!(
+                        "LtHash mismatch for account {}: old_matches={}, new_matches={}\n",
+                        &change.account_pubkey[..8], old_matches, new_matches
+                    ));
+                    if !old_matches {
+                        details.push_str(&format!(
+                            "  Old: calculated={}, stored={}\n",
+                            &format_lthash(&calculated_old_lt)[..32],
+                            &format_lthash(&stored_old_lt)[..32]
+                        ));
+                    }
+                    if !new_matches {
+                        details.push_str(&format!(
+                            "  New: calculated={}, stored={}\n",
+                            &format_lthash(&calculated_new_lt)[..32],
+                            &format_lthash(&stored_new_lt)[..32]
+                        ));
+                    }
+                }
+                
+                // Use the stored values for cumulative calculation
+                calculated_cumulative.mix_out(&stored_old_lt);
+                calculated_cumulative.mix_in(&stored_new_lt);
                 
                 if change.account_pubkey == target_pubkey {
                     details.push_str(&format!(
-                        "Monitored account {}: applied change\n",
-                        &change.account_pubkey[..8]
+                        "Monitored account {}: applied change (verified: old={}, new={})\n",
+                        &change.account_pubkey[..8], old_matches, new_matches
                     ));
                 }
             }
@@ -783,4 +839,52 @@ fn validate_vote_signatures(vote_transactions: &[VoteTransaction]) -> Vec<VoteSi
     }
 
     validations
+}
+
+fn calculate_account_lthash(
+    lamports: u64,
+    _rent_epoch: u64,
+    data: &[u8],
+    executable: bool,
+    owner: &str,
+    pubkey: &Pubkey,
+) -> LtHash {
+    // Handle zero-lamport accounts
+    if lamports == 0 {
+        // Zero lamport accounts have identity LtHash
+        return LtHash::identity();
+    }
+    
+    // Parse owner pubkey
+    let owner_pubkey = match Pubkey::from_str(owner) {
+        Ok(pk) => pk,
+        Err(_) => {
+            warn!("Failed to parse owner pubkey: {}", owner);
+            return LtHash::identity();
+        }
+    };
+    
+    // Create blake3 hasher and hash account components in the exact order Solana uses
+    let mut hasher = blake3::Hasher::new();
+    
+    // 1. Hash lamports (8 bytes, little-endian)
+    hasher.update(&lamports.to_le_bytes());
+    
+    // 2. For LtHash, rent_epoch is excluded (RentEpochInAccountHash::Excluded)
+    // So we skip rent_epoch
+    
+    // 3. Hash account data
+    hasher.update(data);
+    
+    // 4. Hash executable flag (1 byte: 1 if true, 0 if false)
+    hasher.update(&[if executable { 1u8 } else { 0u8 }]);
+    
+    // 5. Hash owner pubkey (32 bytes)
+    hasher.update(owner_pubkey.as_ref());
+    
+    // 6. Hash account pubkey (32 bytes)
+    hasher.update(pubkey.as_ref());
+    
+    // Generate LtHash from the hasher
+    LtHash::with(&hasher)
 }
