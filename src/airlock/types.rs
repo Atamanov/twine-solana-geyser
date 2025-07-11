@@ -1,4 +1,5 @@
 use crossbeam_queue::SegQueue;
+use dashmap::DashMap;
 use log::error;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
@@ -92,8 +93,8 @@ use std::sync::atomic::AtomicU32;
 pub struct AirlockSlotData {
     /// Tracks how many validator threads are currently writing to this slot's buffer
     pub writer_count: AtomicU32,
-    /// Lock-free queue for all account changes in this slot
-    pub buffer: SegQueue<OwnedAccountChange>,
+    /// Per-thread buffers to eliminate contention - indexed by thread ID
+    pub thread_buffers: DashMap<std::thread::ThreadId, Vec<OwnedAccountChange>>,
     /// Tracks if a monitored account was seen in this slot
     pub contains_monitored_change: AtomicBool,
     /// Bank hash components (may arrive at any time)
@@ -132,7 +133,7 @@ impl AirlockSlotData {
     pub fn new() -> Self {
         Self {
             writer_count: AtomicU32::new(0),
-            buffer: SegQueue::new(),
+            thread_buffers: DashMap::new(),
             contains_monitored_change: AtomicBool::new(false),
             bank_hash_components: parking_lot::RwLock::new(None),
             delta_lthash: parking_lot::RwLock::new(None),
@@ -151,24 +152,29 @@ impl AirlockSlotData {
 
     /// Check if we have all required data for database write
     pub fn has_complete_data(&self) -> bool {
-        let has_bank_hash = self
-            .bank_hash_components
-            .read()
-            .as_ref()
-            .map(|c| !c.bank_hash.is_empty())
-            .unwrap_or(false);
-        let has_lthash =
-            self.delta_lthash.read().is_some() && self.cumulative_lthash.read().is_some();
+        // Quick check using atomics to avoid locks
+        // We only do the expensive lock-based check if likely to succeed
+        if !self.is_rooted() {
+            return false;
+        }
+        
+        // Do all checks at once to minimize lock acquisition
+        let has_bank_hash = self.bank_hash_components.read().is_some();
+        if !has_bank_hash {
+            return false;
+        }
+        
+        let has_lthash = self.delta_lthash.read().is_some();
+        if !has_lthash {
+            return false;
+        }
+        
         let has_blockhash = self.blockhash.read().is_some();
-        let has_parent_slot = self.parent_slot.read().is_some();
-        let has_executed_transaction_count = self.executed_transaction_count.read().is_some();
-        let has_entry_count = self.entry_count.read().is_some();
-        has_bank_hash
-            && has_lthash
-            && has_blockhash
-            && has_parent_slot
-            && has_executed_transaction_count
-            && has_entry_count
+        has_blockhash && 
+        self.cumulative_lthash.read().is_some() &&
+        self.parent_slot.read().is_some() &&
+        self.executed_transaction_count.read().is_some() &&
+        self.entry_count.read().is_some()
     }
 
     /// Check if slot is rooted

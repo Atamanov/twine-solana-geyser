@@ -18,7 +18,7 @@ use solana_sdk::account::ReadableAccount;
 use solana_transaction::sanitized::SanitizedTransaction;
 use solana_transaction_status::TransactionStatusMeta;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 use std::collections::{HashMap, VecDeque};
@@ -48,6 +48,8 @@ pub struct TwineGeyserPlugin {
     monitored_accounts: Arc<DashSet<Pubkey>>,
     /// Debouncing map for proof scheduling
     pending_proofs_for_scheduling: Arc<DashMap<Pubkey, u64>>,
+    /// Cache for whether we have any monitored accounts
+    has_monitored_accounts: Arc<AtomicBool>,
     /// Queue feeding the database worker pool
     db_writer_queue: Option<Sender<DbWriteCommand>>,
     /// Worker pool handle
@@ -86,6 +88,7 @@ impl Default for TwineGeyserPlugin {
             airlock: Arc::new(DashMap::new()),
             monitored_accounts: Arc::new(DashSet::new()),
             pending_proofs_for_scheduling: Arc::new(DashMap::new()),
+            has_monitored_accounts: Arc::new(AtomicBool::new(false)),
             db_writer_queue: None,
             worker_pool: None,
             config: None,
@@ -155,9 +158,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Sync monitored accounts from database
         self.sync_monitored_accounts_from_db(&config);
 
+        let monitored_count = self.monitored_accounts.len();
+        self.has_monitored_accounts.store(monitored_count > 0, Ordering::Relaxed);
         info!(
             "Plugin configured with {} monitored accounts",
-            self.monitored_accounts.len()
+            monitored_count
         );
 
         // Start runtime
@@ -316,28 +321,39 @@ impl GeyserPlugin for TwineGeyserPlugin {
             }
         }
 
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Atomically increment writer count
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
-        // Estimate memory usage for this account change
-        let memory_size = std::mem::size_of::<OwnedAccountChange>() + 
-                         account_change.new_account.data().len() +
-                         account_change.old_account.data().len();
-        slot_data.memory_usage.fetch_add(memory_size, Ordering::Relaxed);
-
+        // Quick check: if no monitored accounts at all, skip expensive lookup
+        if !self.has_monitored_accounts.load(Ordering::Relaxed) {
+            // Still need to buffer the change
+            let thread_id = std::thread::current().id();
+            slot_data.thread_buffers.entry(thread_id)
+                .or_insert_with(Vec::new)
+                .push(account_change);
+            slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
+            return Ok(());
+        }
+        
         // Check if this is a monitored account
         let pubkey = account_change.pubkey;
         let is_monitored = self.monitored_accounts.contains(&pubkey);
         
-        // Always buffer ALL account changes (we need complete slot data for proofs)
-        slot_data.buffer.push(account_change);
+        // Get or create thread-local buffer for this slot
+        let thread_id = std::thread::current().id();
+        let mut thread_buffer = slot_data.thread_buffers.entry(thread_id)
+            .or_insert_with(Vec::new);
+        thread_buffer.push(account_change);
         
         // Mark slot if it contains a monitored change
         if is_monitored {
@@ -350,9 +366,6 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 .monitored_account_changes
                 .fetch_add(1, Ordering::Relaxed);
         }
-
-        // Update stats
-        self.stats.total_updates.fetch_add(1, Ordering::Relaxed);
 
         // Atomically decrement writer count
         slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
@@ -380,12 +393,15 @@ impl GeyserPlugin for TwineGeyserPlugin {
             .flat_map(|&x| x.to_le_bytes())
             .collect();
 
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Atomically increment writer count while we update
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
@@ -396,19 +412,12 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         debug!("Updated airlock slot {} with LtHash data", slot);
 
-        // Check if we now have complete data and slot is rooted
-        if slot_data.is_rooted() && slot_data.has_complete_data() {
-            debug!("Slot {} has complete data after LtHash update, triggering write", slot);
-            self.try_write_complete_slot(slot)?;
-        }
+        // Skip immediate write attempt - let rooted handler do it
 
         // Atomically decrement writer count
         slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
 
-        // Update stats
-        self.stats
-            .active_slots
-            .store(self.airlock.len(), Ordering::Relaxed);
+        // Skip expensive len() calculation in hot path
 
         Ok(())
     }
@@ -418,12 +427,15 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         debug!("Received bank hash components for slot {}", slot);
 
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Atomically increment writer count while we update
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
@@ -433,19 +445,12 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         debug!("Updated airlock slot {} with bank hash components", slot);
 
-        // Check if we now have complete data and slot is rooted
-        if slot_data.is_rooted() && slot_data.has_complete_data() {
-            debug!("Slot {} has complete data after bank hash update, triggering write", slot);
-            self.try_write_complete_slot(slot)?;
-        }
+        // Skip immediate write attempt - let rooted handler do it
 
         // Atomically decrement writer count
         slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
 
-        // Update stats
-        self.stats
-            .active_slots
-            .store(self.airlock.len(), Ordering::Relaxed);
+        // Skip expensive len() calculation in hot path
 
         Ok(())
     }
@@ -502,11 +507,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 
                 debug!("Updated airlock slot {} with block metadata", info.slot);
 
-                // Check if we now have complete data and slot is rooted
-                if slot_data.is_rooted() && slot_data.has_complete_data() {
-                    debug!("Slot {} has complete data after block metadata update, triggering write", info.slot);
-                    self.try_write_complete_slot(info.slot)?;
-                }
+                // Skip immediate write attempt - let rooted handler do it
 
                 // Atomically decrement writer count
                 slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
@@ -603,12 +604,15 @@ impl TwineGeyserPlugin {
             timestamp: vote_details.timestamp,
         };
 
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Add vote transaction to slot
         slot_data.vote_transactions.write().push(vote_tx);
@@ -848,10 +852,12 @@ impl TwineGeyserPlugin {
         if slot_data.contains_monitored_change.load(Ordering::Acquire) {
             debug!("Monitored account change detected, saving ALL account changes for slot {}", slot);
             
+            // Consolidate all thread buffers
             let mut all_changes = Vec::new();
-            while let Some(change) = slot_data.buffer.pop() {
-                all_changes.push(change);
+            for entry in slot_data.thread_buffers.iter() {
+                all_changes.extend_from_slice(entry.value());
             }
+            slot_data.thread_buffers.clear();
             
             if !all_changes.is_empty() {
                 let change_count = all_changes.len();
@@ -873,11 +879,13 @@ impl TwineGeyserPlugin {
                 debug!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
             }
         } else {
-            // No monitored changes - clear the buffer without saving
+            // No monitored changes - clear all thread buffers
             let mut discarded_count = 0;
-            while slot_data.buffer.pop().is_some() {
-                discarded_count += 1;
+            for mut entry in slot_data.thread_buffers.iter_mut() {
+                discarded_count += entry.value().len();
+                entry.value_mut().clear();
             }
+            slot_data.thread_buffers.clear();
             if discarded_count > 0 {
                 debug!("Discarded {} account changes for slot {} (no monitored accounts)", discarded_count, slot);
             }
@@ -893,38 +901,29 @@ impl TwineGeyserPlugin {
     }
     
     fn handle_rooted_slot(&self, slot: u64) -> PluginResult<()> {
-        info!("Rooted slot: {}", slot);
+        debug!("Rooted slot: {}", slot);
         // Update validator slot in chain monitor
         if let Some(monitor) = &self.chain_monitor {
             monitor.update_validator_slot(slot);
         }
 
-        // Clean up old airlock entries (slots that are more than 100 slots behind)
-        let min_slot = slot.saturating_sub(100);
-        let mut removed_count = 0;
-        self.airlock.retain(|&airlock_slot, _| {
-            if airlock_slot < min_slot {
-                removed_count += 1;
-                false
-            } else {
-                true
-            }
-        });
-        if removed_count > 0 {
-            info!("Cleaned up {} old airlock entries", removed_count);
-        }
+        // Skip cleanup - let the cleanup task handle it asynchronously
+        // This was blocking the geyser thread
 
         let queue = self
             .db_writer_queue
             .as_ref()
             .ok_or_else(|| GeyserPluginError::Custom("Plugin not initialized".into()))?;
 
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Update slot status to rooted and record current slot
         *slot_data.status.write() = "rooted".to_string();
@@ -990,10 +989,7 @@ impl TwineGeyserPlugin {
             );
         }
 
-        // Update stats
-        self.stats
-            .active_slots
-            .store(self.airlock.len(), Ordering::Relaxed);
+        // Skip expensive len() calculation in hot path
 
         // Log stats every 100 rooted slots
         let last_log = self.last_stats_log_slot.load(Ordering::Relaxed);
@@ -1006,12 +1002,15 @@ impl TwineGeyserPlugin {
     }
 
     fn handle_processed_slot(&self, slot: u64) -> PluginResult<()> {
-        // Get or create airlock slot data
-        let slot_data = self
-            .airlock
-            .entry(slot)
-            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
-            .clone();
+        // Try to get existing slot data first to avoid lock contention
+        let slot_data = if let Some(existing) = self.airlock.get(&slot) {
+            existing.clone()
+        } else {
+            self.airlock
+                .entry(slot)
+                .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+                .clone()
+        };
 
         // Update slot status
         *slot_data.status.write() = "processed".to_string();
