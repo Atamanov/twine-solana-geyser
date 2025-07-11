@@ -432,23 +432,24 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
             }
         };
 
-        // Parse accounts lattice hash checksum - this should always be present in post-LtHash world
-        let checksum_hash = if let Some(checksum_str) = &slot.accounts_lthash_checksum {
-            match Hash::from_str(checksum_str) {
-                Ok(h) => h,
-                Err(e) => {
-                    warn!("Failed to parse accounts_lthash_checksum for slot {}: {}", slot.slot, e);
-                    validations.push(BankHashValidation {
-                        slot: slot.slot,
-                        expected_hash: slot.bank_hash.clone(),
-                        calculated_hash: "Error".to_string(),
-                        valid: false,
-                    });
-                    continue;
-                }
-            }
+        // For post-LtHash era:
+        // Step 1: Base hash without accounts hash
+        calculated_hash = solana_sdk::hash::hashv(&[
+            parent_hash.as_ref(),
+            &signature_count_bytes,
+            last_blockhash.as_ref(),
+        ]);
+
+        // Step 2: Add the cumulative LtHash bytes (not the checksum!)
+        // The LtHash bytes should be in cumulative_lthash field
+        if !slot.cumulative_lthash.is_empty() {
+            // The cumulative_lthash contains the raw LtHash bytes
+            calculated_hash = solana_sdk::hash::hashv(&[
+                calculated_hash.as_ref(),
+                &slot.cumulative_lthash,
+            ]);
         } else {
-            warn!("Missing accounts_lthash_checksum for slot {}", slot.slot);
+            warn!("Missing cumulative_lthash for slot {}", slot.slot);
             validations.push(BankHashValidation {
                 slot: slot.slot,
                 expected_hash: slot.bank_hash.clone(),
@@ -456,16 +457,7 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
                 valid: false,
             });
             continue;
-        };
-
-        // The correct order for bank hash is:
-        // hashv([parent_bank_hash, accounts_lthash_checksum, signature_count, last_blockhash])
-        calculated_hash = solana_sdk::hash::hashv(&[
-            parent_hash.as_ref(),
-            checksum_hash.as_ref(),
-            &signature_count_bytes,
-            last_blockhash.as_ref(),
-        ]);
+        }
         
         let valid = calculated_hash.to_string() == slot.bank_hash;
         
