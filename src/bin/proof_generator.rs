@@ -620,41 +620,56 @@ fn validate_lthash_transformation(
                 
                 if !old_matches || !new_matches {
                     mismatch_count += 1;
-                    details.push_str(&format!(
-                        "\n[{}] LtHash mismatch for account {} ({}): old_matches={}, new_matches={}\n",
+                    let mismatch_msg = format!(
+                        "[{}] LtHash mismatch for account {} ({}): old_matches={}, new_matches={}",
                         idx, &change.account_pubkey[..8], &change.account_pubkey, old_matches, new_matches
-                    ));
+                    );
+                    warn!("{}", mismatch_msg);
+                    details.push_str(&format!("\n{}\n", mismatch_msg));
+                    
                     if !old_matches {
-                        details.push_str(&format!(
-                            "  Old: calculated={}, stored={}\n",
+                        let old_msg = format!(
+                            "  Old: calculated={}, stored={}",
                             &format_lthash(&calculated_old_lt)[..32],
                             &format_lthash(&stored_old_lt)[..32]
-                        ));
-                        details.push_str(&format!(
-                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}\n",
+                        );
+                        warn!("{}", old_msg);
+                        details.push_str(&format!("{}\n", old_msg));
+                        
+                        let old_details = format!(
+                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}",
                             change.old_data.len(), old_lamports, change.old_lamports, change.old_owner, change.old_executable, change.old_rent_epoch
-                        ));
+                        );
+                        warn!("{}", old_details);
+                        details.push_str(&format!("{}\n", old_details));
                     }
                     if !new_matches {
-                        details.push_str(&format!(
-                            "  New: calculated={}, stored={}\n",
+                        let new_msg = format!(
+                            "  New: calculated={}, stored={}",
                             &format_lthash(&calculated_new_lt)[..32],
                             &format_lthash(&stored_new_lt)[..32]
-                        ));
-                        details.push_str(&format!(
-                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}\n",
+                        );
+                        warn!("{}", new_msg);
+                        details.push_str(&format!("{}\n", new_msg));
+                        
+                        let new_details = format!(
+                            "    Data len: {}, lamports: {} (raw: {}), owner: {}, executable: {}, rent_epoch: {}",
                             change.new_data.len(), new_lamports, change.new_lamports, change.new_owner, change.new_executable, change.new_rent_epoch
-                        ));
+                        );
+                        warn!("{}", new_details);
+                        details.push_str(&format!("{}\n", new_details));
                     }
                     
                     // Show cumulative state after this account
                     let mut test_cumulative = calculated_cumulative.clone();
                     test_cumulative.mix_out(&stored_old_lt);
                     test_cumulative.mix_in(&stored_new_lt);
-                    details.push_str(&format!(
-                        "  Cumulative after this account: {}\n",
+                    let cumulative_msg = format!(
+                        "  Cumulative after this account: {}",
                         &format_lthash(&test_cumulative)[..32]
-                    ));
+                    );
+                    warn!("{}", cumulative_msg);
+                    details.push_str(&format!("{}\n", cumulative_msg));
                 }
                 
                 // Use the stored values for cumulative calculation
