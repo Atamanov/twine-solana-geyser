@@ -570,6 +570,9 @@ fn validate_lthash_transformation(
     
     // Start with previous cumulative LtHash
     let mut calculated_cumulative = prev_cumulative.clone();
+    let start_msg = format!("Starting LtHash validation: prev_slot={}, last_slot={}", prev_slot.slot, last_slot.slot);
+    info!("{}", start_msg);
+    details.push_str(&format!("{}\n", start_msg));
     details.push_str(&format!("Starting with previous cumulative: {}\n", &format_lthash(&calculated_cumulative)[..32]));
     details.push_str(&format!("Processing {} account changes\n", account_changes.len()));
     
@@ -718,28 +721,38 @@ fn validate_lthash_transformation(
     
     // Add summary of mismatches
     if mismatch_count > 0 {
-        details.push_str(&format!("\n\nSUMMARY: Found {} account LtHash mismatches out of {} total accounts\n", mismatch_count, account_changes.len()));
+        let summary = format!("SUMMARY: Found {} account LtHash mismatches out of {} total accounts", mismatch_count, account_changes.len());
+        warn!("{}", summary);
+        details.push_str(&format!("\n\n{}\n", summary));
     }
     
     // Now check if our calculated cumulative matches the stored one
     let cumulative_matches = calculated_cumulative == stored_cumulative;
-    details.push_str(&format!(
-        "\nFinal cumulative verification: {} (calculated: {}, stored: {})\n",
+    let final_msg = format!(
+        "Final cumulative verification: {} (calculated: {}, stored: {})",
         if cumulative_matches { "MATCHES" } else { "MISMATCH" },
         &format_lthash(&calculated_cumulative)[..32],
         &format_lthash(&stored_cumulative)[..32]
-    ));
+    );
+    if !cumulative_matches {
+        warn!("{}", final_msg);
+    }
+    details.push_str(&format!("\n{}\n", final_msg));
     
     // Also verify the checksum
     let calculated_checksum = calculated_cumulative.checksum();
     let checksum_matches = if let Some(stored_checksum_str) = &last_slot.accounts_lthash_checksum {
         let matches = calculated_checksum.to_string() == *stored_checksum_str;
-        details.push_str(&format!(
-            "Checksum verification: {} (calculated: {}, stored: {})\n",
+        let checksum_msg = format!(
+            "Checksum verification: {} (calculated: {}, stored: {})",
             if matches { "MATCHES" } else { "MISMATCH" },
             calculated_checksum,
             stored_checksum_str
-        ));
+        );
+        if !matches {
+            warn!("{}", checksum_msg);
+        }
+        details.push_str(&format!("{}\n", checksum_msg));
         matches
     } else {
         details.push_str("No stored checksum to verify\n");
