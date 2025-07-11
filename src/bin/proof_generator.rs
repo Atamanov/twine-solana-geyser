@@ -459,12 +459,12 @@ fn validate_bank_hashes(slot_chain: &[SlotData]) -> Vec<BankHashValidation> {
         };
 
         // The correct order for bank hash is:
-        // hashv([parent_bank_hash, signature_count, last_blockhash, accounts_lthash_checksum])
+        // hashv([parent_bank_hash, accounts_lthash_checksum, signature_count, last_blockhash])
         calculated_hash = solana_sdk::hash::hashv(&[
             parent_hash.as_ref(),
+            checksum_hash.as_ref(),
             &signature_count_bytes,
             last_blockhash.as_ref(),
-            checksum_hash.as_ref(),
         ]);
         
         let valid = calculated_hash.to_string() == slot.bank_hash;
