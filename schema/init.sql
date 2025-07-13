@@ -137,14 +137,20 @@ CREATE INDEX IF NOT EXISTS idx_proof_requests_status ON proof_requests (status) 
 CREATE INDEX IF NOT EXISTS idx_proof_requests_created ON proof_requests (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_proof_requests_account_slot ON proof_requests (account_pubkey, slot DESC);
 
--- Enable compression on hypertables first
+-- Enable compression on all hypertables
 ALTER TABLE slots SET (timescaledb.compress, timescaledb.compress_segmentby = 'slot');
 ALTER TABLE account_changes SET (timescaledb.compress, timescaledb.compress_segmentby = 'account_pubkey', timescaledb.compress_orderby = 'slot DESC');
+ALTER TABLE vote_transactions SET (timescaledb.compress, timescaledb.compress_segmentby = 'voter_pubkey', timescaledb.compress_orderby = 'slot DESC');
+ALTER TABLE stake_account_states SET (timescaledb.compress, timescaledb.compress_segmentby = 'stake_pubkey', timescaledb.compress_orderby = 'slot DESC');
+ALTER TABLE account_change_stats SET (timescaledb.compress, timescaledb.compress_segmentby = 'account_pubkey', timescaledb.compress_orderby = 'created_at DESC');
 
--- Create compression policy for older data (optional, can be adjusted)
--- Compress chunks older than 7 days
-SELECT add_compression_policy('slots', INTERVAL '7 days');
-SELECT add_compression_policy('account_changes', INTERVAL '7 days');
+-- Create compression policy for older data - aggressive for mainnet
+-- Compress chunks older than 6 hours for high-volume tables
+SELECT add_compression_policy('slots', INTERVAL '6 hours');
+SELECT add_compression_policy('account_changes', INTERVAL '6 hours');
+SELECT add_compression_policy('vote_transactions', INTERVAL '6 hours');
+SELECT add_compression_policy('stake_account_states', INTERVAL '12 hours');
+SELECT add_compression_policy('account_change_stats', INTERVAL '1 day');
 
 -- Create retention policies (optional, adjust as needed)
 -- Drop chunks older than 30 days
@@ -581,3 +587,22 @@ SELECT
 FROM vote_sequence
 WHERE created_at > NOW() - INTERVAL '1 hour'
 ORDER BY voter_pubkey, slot DESC;
+
+-- Additional compression and retention policies for mainnet scale
+
+-- Retention policies for all tables to prevent unbounded growth
+-- Large volume tables - 1 day retention
+SELECT add_retention_policy('slots', INTERVAL '1 day', if_not_exists => TRUE);
+SELECT add_retention_policy('account_changes', INTERVAL '1 day', if_not_exists => TRUE);
+SELECT add_retention_policy('vote_transactions', INTERVAL '1 day', if_not_exists => TRUE);
+
+-- Medium volume tables - 3 days retention  
+SELECT add_retention_policy('proof_requests', INTERVAL '3 days', if_not_exists => TRUE);
+SELECT add_retention_policy('stake_account_states', INTERVAL '3 days', if_not_exists => TRUE);
+SELECT add_retention_policy('geyser_stats', INTERVAL '3 days', if_not_exists => TRUE);
+
+-- Low volume/reference tables - 7 days retention
+SELECT add_retention_policy('account_change_stats', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_retention_policy('monitored_accounts', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_retention_policy('epoch_stakes', INTERVAL '7 days', if_not_exists => TRUE);
+SELECT add_retention_policy('epoch_validator_sets', INTERVAL '7 days', if_not_exists => TRUE);
