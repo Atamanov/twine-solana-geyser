@@ -834,7 +834,12 @@ impl TwineGeyserPlugin {
         let parent_slot = slot_data.parent_slot.read().clone();
         let executed_transaction_count = slot_data.executed_transaction_count.read().clone();
         let entry_count = slot_data.entry_count.read().clone();
-        let vote_transactions = slot_data.vote_transactions.read().clone();
+        // Only include votes if monitored accounts changed
+        let vote_transactions = if slot_data.contains_monitored_change.load(Ordering::Acquire) {
+            slot_data.vote_transactions.read().clone()
+        } else {
+            Vec::new()
+        };
 
         debug!(
             "Writing complete slot {} data to DB: bank_hash={}, lthash_len={}, votes={}, status={}",
@@ -1265,6 +1270,7 @@ impl TwineGeyserPlugin {
                 let current_network_slot = stats.last_db_batch_slot.load(Ordering::Relaxed) as u64;
                 
                 // Check for incomplete rooted slots that have exceeded grace period (32 slots)
+                // Also check for very old unrooted slots (likely orphaned)
                 for entry in airlock.iter() {
                     let slot = *entry.key();
                     let slot_data = entry.value();
@@ -1275,6 +1281,9 @@ impl TwineGeyserPlugin {
                             // This slot has been rooted for over 32 slots without complete data
                             incomplete_slots_to_write.push((slot, slot_data.clone()));
                         }
+                    } else if current_network_slot > slot + 1000 {
+                        // Slot is 1000+ slots old and never rooted - likely orphaned
+                        slots_to_remove.push(slot);
                     }
                 }
                 
@@ -1416,6 +1425,25 @@ impl TwineGeyserPlugin {
                 let slot_count = airlock.len();
                 stats.active_slots.store(slot_count, Ordering::Relaxed);
                 stats.slots_in_memory.store(slot_count, Ordering::Relaxed);
+                
+                // Emergency cleanup if too many slots in memory
+                if slot_count > 10000 {
+                    warn!("High memory pressure: {} slots in memory, forcing cleanup", slot_count);
+                    // Remove oldest 1000 slots
+                    let mut oldest_slots: Vec<u64> = airlock.iter()
+                        .map(|e| *e.key())
+                        .collect();
+                    oldest_slots.sort();
+                    for &slot in oldest_slots.iter().take(1000) {
+                        if let Some((_, slot_data)) = airlock.remove(&slot) {
+                            // Wait for writers
+                            while slot_data.writer_count.load(Ordering::Acquire) > 0 {
+                                std::hint::spin_loop();
+                            }
+                            deleted_count += 1;
+                        }
+                    }
+                }
             }
         });
         
