@@ -71,18 +71,41 @@ impl DbWriter {
     async fn process_command(&self, cmd: DbCommand) {
         match cmd {
             DbCommand::WriteSlot(slot_data) => {
-                if let Err(e) = self.write_slot(slot_data).await {
-                    log::error!("Failed to write slot: {:?}", e);
+                match self.write_slot(slot_data).await {
+                    Ok(_) => {
+                        // Increment success counter
+                        crate::metrics::increment_write_success("slot");
+                    }
+                    Err(e) => {
+                        log::error!("Failed to write slot: {:?}", e);
+                        crate::metrics::increment_write_error("slot", "write_error");
+                    }
                 }
             }
             DbCommand::WriteAccountChanges(changes) => {
-                if let Err(e) = self.write_account_changes(changes).await {
-                    log::error!("Failed to write account changes: {:?}", e);
+                let count = changes.len();
+                match self.write_account_changes(changes).await {
+                    Ok(_) => {
+                        // Increment success counter
+                        crate::metrics::increment_account_changes_written(count as u64);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to write account changes: {:?}", e);
+                        crate::metrics::increment_write_error("account_changes", "write_error");
+                    }
                 }
             }
             DbCommand::WriteVoteTransactions(votes) => {
-                if let Err(e) = self.write_vote_transactions(votes).await {
-                    log::error!("Failed to write vote transactions: {:?}", e);
+                let count = votes.len();
+                match self.write_vote_transactions(votes).await {
+                    Ok(_) => {
+                        // Increment success counter
+                        crate::metrics::increment_vote_transactions_written(count as u64);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to write vote transactions: {:?}", e);
+                        crate::metrics::increment_write_error("vote_transactions", "write_error");
+                    }
                 }
             }
             DbCommand::Shutdown => unreachable!(),

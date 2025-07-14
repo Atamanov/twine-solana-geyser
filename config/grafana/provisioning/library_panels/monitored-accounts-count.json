@@ -1,0 +1,77 @@
+{
+  "uid": "monitored-accounts-count",
+  "title": "Monitored Accounts",
+  "description": "Number of accounts being actively monitored",
+  "type": "stat",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "colorMode": "background",
+    "graphMode": "area",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+      "calcs": ["lastNotNull"],
+      "fields": "",
+      "values": false
+    },
+    "showPercentChange": true,
+    "textMode": "value_and_name",
+    "wideLayout": true
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "editorMode": "code",
+      "format": "time_series",
+      "rawQuery": true,
+      "rawSql": "SELECT \n  NOW() AS time,\n  COUNT(DISTINCT pubkey) AS \"Active Accounts\"\nFROM monitored_accounts\nWHERE is_active = true",
+      "refId": "A",
+      "sql": {
+        "columns": [
+          {
+            "parameters": [],
+            "type": "function"
+          }
+        ],
+        "groupBy": [
+          {
+            "property": {
+              "type": "string"
+            },
+            "type": "groupBy"
+          }
+        ],
+        "limit": 50
+      }
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "blue",
+            "value": null
+          },
+          {
+            "color": "green",
+            "value": 1
+          }
+        ]
+      },
+      "unit": "none",
+      "decimals": 0
+    },
+    "overrides": []
+  }
+}

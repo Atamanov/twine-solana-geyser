@@ -1,33 +1,29 @@
 apiVersion: 1
 
 datasources:
-  # TimescaleDB datasource for direct SQL queries
-  - name: TimescaleDB
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    uid: prometheus
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+
+  - name: PostgreSQL
     type: postgres
     access: proxy
+    uid: postgres
     url: timescaledb:5432
     database: twine_solana_db
     user: geyser_writer
+    secureJsonData:
+      password: geyser_writer_password
     jsonData:
-      sslmode: 'disable'
+      sslmode: disable
       maxOpenConns: 100
       maxIdleConns: 100
       maxIdleConnsAuto: true
       connMaxLifetime: 14400
       postgresVersion: 1600
       timescaledb: true
-    secureJsonData:
-      password: geyser_writer_password
-    editable: true
-
-  # Prometheus datasource for metrics
-  - name: Prometheus
-    type: prometheus
-    access: proxy
-    url: http://prometheus:9090
-    isDefault: true
-    jsonData:
-      timeInterval: '15s'
-      queryTimeout: '60s'
-      httpMethod: 'POST'
     editable: true

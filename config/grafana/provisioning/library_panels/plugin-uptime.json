@@ -1,0 +1,56 @@
+{
+  "uid": "plugin-uptime",
+  "title": "Plugin Uptime",
+  "description": "Time since the Geyser plugin was started",
+  "type": "stat",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "colorMode": "background",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+      "calcs": ["lastNotNull"],
+      "fields": "",
+      "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "editorMode": "code",
+      "expr": "time() - twine_geyser_plugin_start_time",
+      "legendFormat": "Uptime",
+      "range": true,
+      "refId": "A"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "dark-green",
+            "value": null
+          }
+        ]
+      },
+      "unit": "s",
+      "decimals": 0
+    },
+    "overrides": []
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "uid": "compression-status",
+  "title": "TimescaleDB Compression Status",
+  "description": "Compression efficiency and chunk status",
+  "type": "table",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "showHeader": true,
+    "sortBy": [
+      {
+        "desc": true,
+        "displayName": "Uncompressed Size"
+      }
+    ],
+    "cellHeight": "sm",
+    "frameIndex": 0,
+    "showTypeIcons": false
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "editorMode": "code",
+      "format": "table",
+      "rawQuery": true,
+      "rawSql": "SELECT \n  hypertable_name AS \"Table\",\n  COUNT(*) FILTER (WHERE is_compressed) AS \"Compressed Chunks\",\n  COUNT(*) FILTER (WHERE NOT is_compressed) AS \"Uncompressed Chunks\",\n  pg_size_pretty(SUM(CASE WHEN is_compressed THEN after_compression_total_bytes ELSE before_compression_total_bytes END)) AS \"Total Size\",\n  pg_size_pretty(SUM(before_compression_total_bytes)) AS \"Uncompressed Size\",\n  ROUND((1 - (SUM(CASE WHEN is_compressed THEN after_compression_total_bytes ELSE before_compression_total_bytes END)::numeric / \n         NULLIF(SUM(before_compression_total_bytes)::numeric, 0))) * 100, 2) AS \"Compression %\"\nFROM timescaledb_information.chunks\nGROUP BY hypertable_name\nORDER BY SUM(before_compression_total_bytes) DESC",
+      "refId": "A",
+      "sql": {
+        "columns": [
+          {
+            "parameters": [],
+            "type": "function"
+          }
+        ],
+        "groupBy": [
+          {
+            "property": {
+              "type": "string"
+            },
+            "type": "groupBy"
+          }
+        ],
+        "limit": 50
+      }
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "text",
+            "value": null
+          }
+        ]
+      },
+      "custom": {
+        "align": "auto",
+        "cellOptions": {
+          "type": "auto"
+        },
+        "inspect": false,
+        "filterable": true
+      }
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Compression %"
+        },
+        "properties": [
+          {
+            "id": "unit",
+            "value": "percent"
+          },
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-background"
+            }
+          },
+          {
+            "id": "color",
+            "value": {
+              "mode": "continuous-GrYlRd"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Compressed Chunks"
+        },
+        "properties": [
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-text"
+            }
+          },
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "green"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "Uncompressed Chunks"
+        },
+        "properties": [
+          {
+            "id": "custom.cellOptions",
+            "value": {
+              "type": "color-text"
+            }
+          },
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "orange"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

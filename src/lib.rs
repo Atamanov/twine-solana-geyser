@@ -4,6 +4,7 @@ pub mod api;
 pub mod db_writer;
 pub mod metrics;
 pub mod plugin;
+pub mod rpc_poller;
 
 #[cfg(feature = "tests-only")]
 mod tests;

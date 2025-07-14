@@ -1,0 +1,99 @@
+
+{
+    "name": "Slot Processing Rate",
+    "model": {
+    "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+    },
+    "fieldConfig": {
+        "defaults": {
+        "color": {
+            "mode": "palette-classic"
+        },
+        "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+            "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+            "group": "A",
+            "mode": "none"
+            },
+            "thresholdsStyle": {
+            "mode": "off"
+            }
+        },
+        "mappings": [],
+        "thresholds": {
+            "mode": "absolute",
+            "steps": [
+            {
+                "color": "green",
+                "value": null
+            }
+            ]
+        },
+        "unit": "ops"
+        },
+        "overrides": []
+    },
+    "options": {
+        "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+        },
+        "legend": {
+        "displayMode": "list",
+        "placement": "bottom",
+        "showLegend": true
+        }
+    },
+    "targets": [
+        {
+        "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+        },
+        "editorMode": "code",
+        "expr": "rate(geyser_slots_created_total[5m])",
+        "legendFormat": "Slots Created/sec",
+        "range": true,
+        "refId": "A"
+        },
+        {
+        "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+        },
+        "editorMode": "code",
+        "expr": "rate(geyser_slots_completed_total[5m])",
+        "legendFormat": "Slots Completed/sec",
+        "range": true,
+        "refId": "B"
+        }
+    ],
+    "title": "Slot Processing Rate",
+    "type": "timeseries"
+    },
+    "type": "graph",
+    "schemaVersion": 1
+}

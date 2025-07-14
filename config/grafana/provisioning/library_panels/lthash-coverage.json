@@ -1,0 +1,82 @@
+{
+  "uid": "lthash-coverage",
+  "title": "LtHash Data Coverage",
+  "description": "Percentage of slots with complete LtHash data for validation",
+  "type": "gauge",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "orientation": "auto",
+    "reduceOptions": {
+      "values": false,
+      "calcs": ["lastNotNull"]
+    },
+    "showThresholdLabels": true,
+    "showThresholdMarkers": true,
+    "displayMode": "gradient",
+    "text": {}
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "editorMode": "code",
+      "format": "table",
+      "rawQuery": true,
+      "rawSql": "WITH recent_slots AS (\n  SELECT \n    COUNT(*) FILTER (WHERE accounts_lt_hash IS NOT NULL) AS with_lthash,\n    COUNT(*) AS total\n  FROM slots\n  WHERE created_at >= NOW() - INTERVAL '5 minutes'\n)\nSELECT \n  CASE \n    WHEN total > 0 THEN (with_lthash::float / total::float * 100)\n    ELSE 0\n  END as \"Coverage %\"\nFROM recent_slots",
+      "refId": "A",
+      "sql": {
+        "columns": [
+          {
+            "parameters": [],
+            "type": "function"
+          }
+        ],
+        "groupBy": [
+          {
+            "property": {
+              "type": "string"
+            },
+            "type": "groupBy"
+          }
+        ],
+        "limit": 50
+      }
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "red",
+            "value": null
+          },
+          {
+            "color": "orange",
+            "value": 80
+          },
+          {
+            "color": "yellow",
+            "value": 90
+          },
+          {
+            "color": "green",
+            "value": 95
+          }
+        ]
+      },
+      "unit": "percent",
+      "min": 0,
+      "max": 100
+    },
+    "overrides": []
+  }
+}

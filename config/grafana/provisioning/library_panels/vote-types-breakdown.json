@@ -1,0 +1,134 @@
+{
+  "uid": "vote-types-breakdown",
+  "title": "Vote Types Distribution",
+  "description": "Breakdown of vote transaction types",
+  "type": "piechart",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "pieType": "donut",
+    "tooltip": {
+      "mode": "single",
+      "sort": "none"
+    },
+    "legend": {
+      "displayMode": "table",
+      "placement": "right",
+      "showLegend": true,
+      "values": ["value", "percent"]
+    },
+    "displayLabels": ["name", "percent"],
+    "reduceOptions": {
+      "values": false,
+      "calcs": ["lastNotNull"]
+    }
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "editorMode": "code",
+      "format": "table",
+      "rawQuery": true,
+      "rawSql": "SELECT \n  vote_type AS \"Type\",\n  COUNT(*) AS \"Count\"\nFROM vote_transactions\nWHERE created_at >= NOW() - INTERVAL '5 minutes'\nGROUP BY vote_type\nORDER BY \"Count\" DESC",
+      "refId": "A",
+      "sql": {
+        "columns": [
+          {
+            "parameters": [],
+            "type": "function"
+          }
+        ],
+        "groupBy": [
+          {
+            "property": {
+              "type": "string"
+            },
+            "type": "groupBy"
+          }
+        ],
+        "limit": 50
+      }
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "palette-classic"
+      },
+      "custom": {
+        "hideFrom": {
+          "tooltip": false,
+          "viz": false,
+          "legend": false
+        }
+      },
+      "mappings": [],
+      "unit": "none"
+    },
+    "overrides": [
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "vote"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "green"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "tower_sync"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "blue"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "tower_sync_switch"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "purple"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "id": "byName",
+          "options": "compact_vote_state_update"
+        },
+        "properties": [
+          {
+            "id": "color",
+            "value": {
+              "mode": "fixed",
+              "fixedColor": "orange"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

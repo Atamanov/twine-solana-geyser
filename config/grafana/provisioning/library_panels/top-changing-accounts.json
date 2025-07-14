@@ -1,0 +1,91 @@
+{
+  "uid": "top-changing-accounts",
+  "title": "Top Changing Accounts",
+  "description": "Accounts with the most state changes",
+  "type": "barchart",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "legend": {
+      "displayMode": "hidden",
+      "placement": "bottom",
+      "showLegend": false
+    },
+    "orientation": "horizontal",
+    "barWidth": 0.8,
+    "groupWidth": 0.7,
+    "xTickLabelRotation": 0,
+    "xTickLabelSpacing": 100,
+    "stacking": "none",
+    "showValue": "always",
+    "barRadius": 0.1
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "postgres",
+        "uid": "${postgres}"
+      },
+      "editorMode": "code",
+      "format": "table",
+      "rawQuery": true,
+      "rawSql": "SELECT \n  ma.account_name AS \"Account\",\n  COUNT(ac.id) AS \"Changes\"\nFROM account_changes ac\nJOIN monitored_accounts ma ON ac.pubkey = ma.pubkey\nWHERE ac.created_at >= NOW() - INTERVAL '1 hour'\nGROUP BY ma.account_name, ma.pubkey\nORDER BY \"Changes\" DESC\nLIMIT 10",
+      "refId": "A",
+      "sql": {
+        "columns": [
+          {
+            "parameters": [],
+            "type": "function"
+          }
+        ],
+        "groupBy": [
+          {
+            "property": {
+              "type": "string"
+            },
+            "type": "groupBy"
+          }
+        ],
+        "limit": 50
+      }
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "continuous-GrYlRd"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "green",
+            "value": null
+          }
+        ]
+      },
+      "unit": "none",
+      "custom": {
+        "axisBorderShow": false,
+        "axisCenteredZero": false,
+        "axisColorMode": "text",
+        "axisLabel": "",
+        "axisPlacement": "auto",
+        "axisSoftMin": 0,
+        "fillOpacity": 80,
+        "gradientMode": "scheme",
+        "hideFrom": {
+          "tooltip": false,
+          "viz": false,
+          "legend": false
+        },
+        "lineWidth": 1,
+        "scaleDistribution": {
+          "type": "linear"
+        }
+      }
+    },
+    "overrides": []
+  }
+}

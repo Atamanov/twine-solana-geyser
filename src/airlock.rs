@@ -394,6 +394,8 @@ impl AirLock {
     pub fn mark_slot_ready(&self, slot: Slot) {
         if self.slots.contains_key(&slot) {
             self.ready_queue.push(slot);
+            // Track forced completion as eviction
+            crate::metrics::increment_buffer_evictions("forced_shutdown", 1);
         }
     }
 
@@ -478,6 +480,9 @@ impl AirLock {
             self.metrics
                 .slots_dropped
                 .fetch_add(removed, Ordering::Relaxed);
+            
+            // Track evictions in global metrics
+            crate::metrics::increment_buffer_evictions("slot_age", removed);
         }
 
         // Cleanup inactive threads
@@ -515,6 +520,10 @@ impl AirLock {
                 .metrics
                 .account_changes_buffered
                 .load(Ordering::Relaxed),
+            total_vote_transactions: self
+                .metrics
+                .vote_transactions_buffered
+                .load(Ordering::Relaxed),
             ready_slots: self.ready_queue.len(),
         }
     }
@@ -532,6 +541,18 @@ impl AirLock {
     /// Get total vote transactions
     pub fn get_total_vote_transactions(&self) -> u64 {
         self.metrics.vote_transactions_buffered.load(Ordering::Relaxed)
+    }
+    
+    /// Get slot ages in milliseconds
+    pub fn get_slot_ages_ms(&self) -> Vec<u64> {
+        let now = Instant::now();
+        self.slots
+            .iter()
+            .map(|entry| {
+                let slot_data = entry.value();
+                now.duration_since(slot_data.created_at).as_millis() as u64
+            })
+            .collect()
     }
 }
 
@@ -572,5 +593,6 @@ pub struct AirLockStats {
     pub active_slots: usize,
     pub total_slots: u64,
     pub total_account_changes: u64,
+    pub total_vote_transactions: u64,
     pub ready_slots: usize,
 }

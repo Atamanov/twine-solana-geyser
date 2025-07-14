@@ -1,0 +1,56 @@
+{
+  "uid": "validator-slot",
+  "title": "Validator Slot",
+  "description": "Current slot being processed by our validator",
+  "type": "stat",
+  "schemaVersion": 39,
+  "version": 1,
+  "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "center",
+    "orientation": "auto",
+    "percentChangeColorMode": "standard",
+    "reduceOptions": {
+      "calcs": ["lastNotNull"],
+      "fields": "",
+      "values": false
+    },
+    "showPercentChange": false,
+    "textMode": "value_and_name",
+    "wideLayout": true
+  },
+  "targets": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${prometheus}"
+      },
+      "editorMode": "code",
+      "expr": "twine_geyser_validator_slot",
+      "legendFormat": "Validator",
+      "range": true,
+      "refId": "A"
+    }
+  ],
+  "fieldConfig": {
+    "defaults": {
+      "color": {
+        "mode": "thresholds"
+      },
+      "mappings": [],
+      "thresholds": {
+        "mode": "absolute",
+        "steps": [
+          {
+            "color": "purple",
+            "value": null
+          }
+        ]
+      },
+      "unit": "none",
+      "decimals": 0
+    },
+    "overrides": []
+  }
+}

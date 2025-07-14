@@ -1,0 +1,446 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 100,
+      "panels": [],
+      "title": "🚀 Core Metrics",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "id": 1,
+      "libraryPanel": {
+        "uid": "rpc-network-slot",
+        "name": "RPC Network Slot"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "id": 2,
+      "libraryPanel": {
+        "uid": "validator-slot",
+        "name": "Validator Slot"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 3,
+      "libraryPanel": {
+        "uid": "slot-lag",
+        "name": "Slot Lag"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "libraryPanel": {
+        "uid": "plugin-uptime",
+        "name": "Plugin Uptime"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 16,
+        "y": 1
+      },
+      "id": 5,
+      "libraryPanel": {
+        "uid": "buffer-statistics",
+        "name": "Buffer Statistics"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 6,
+      "libraryPanel": {
+        "uid": "queue-utilization",
+        "name": "Queue Utilization"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 7,
+      "libraryPanel": {
+        "uid": "processing-rates",
+        "name": "Processing Rates"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 13
+      },
+      "id": 200,
+      "panels": [],
+      "title": "📊 Data Quality",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 14
+      },
+      "id": 8,
+      "libraryPanel": {
+        "uid": "lthash-coverage",
+        "name": "LtHash Data Coverage"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 6,
+        "w": 10,
+        "x": 6,
+        "y": 14
+      },
+      "id": 9,
+      "libraryPanel": {
+        "uid": "slot-gaps",
+        "name": "Slot Gap Analysis"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 6,
+        "w": 8,
+        "x": 16,
+        "y": 14
+      },
+      "id": 10,
+      "libraryPanel": {
+        "uid": "recent-slots-table",
+        "name": "Recent Slots with LtHash"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 300,
+      "panels": [],
+      "title": "👁️ Account Monitoring",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 21
+      },
+      "id": 11,
+      "libraryPanel": {
+        "uid": "monitored-accounts-count",
+        "name": "Monitored Accounts"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 4,
+        "y": 21
+      },
+      "id": 12,
+      "libraryPanel": {
+        "uid": "account-changes-timeline",
+        "name": "Account Changes Timeline"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 21
+      },
+      "id": 13,
+      "libraryPanel": {
+        "uid": "top-changing-accounts",
+        "name": "Top Changing Accounts"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "id": 400,
+      "panels": [],
+      "title": "🗳️ Vote Analytics",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 30
+      },
+      "id": 14,
+      "libraryPanel": {
+        "uid": "vote-types-breakdown",
+        "name": "Vote Types Distribution"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 10,
+        "x": 6,
+        "y": 30
+      },
+      "id": 15,
+      "libraryPanel": {
+        "uid": "vote-participation-rate",
+        "name": "Vote Participation Rate"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 30
+      },
+      "id": 16,
+      "libraryPanel": {
+        "uid": "tower-sync-analysis",
+        "name": "Tower Sync Vote Analysis"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "id": 17,
+      "libraryPanel": {
+        "uid": "live-vote-stream",
+        "name": "Live Vote Stream"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 500,
+      "panels": [],
+      "title": "💾 Performance & Memory",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "id": 18,
+      "libraryPanel": {
+        "uid": "memory-usage",
+        "name": "Memory Usage by Component"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "id": 19,
+      "libraryPanel": {
+        "uid": "airlock-performance",
+        "name": "Airlock Performance"
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "id": 600,
+      "panels": [],
+      "title": "🗄️ Database Health",
+      "type": "row"
+    },
+    {
+      "gridPos": {
+        "h": 4,
+        "w": 8,
+        "x": 0,
+        "y": 58
+      },
+      "id": 20,
+      "libraryPanel": {
+        "uid": "database-health",
+        "name": "Database Health Overview"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 58
+      },
+      "id": 21,
+      "libraryPanel": {
+        "uid": "table-sizes",
+        "name": "Table Size Distribution"
+      }
+    },
+    {
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 58
+      },
+      "id": 22,
+      "libraryPanel": {
+        "uid": "compression-status",
+        "name": "TimescaleDB Compression Status"
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["twine", "solana", "geyser", "monitoring"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 2,
+        "includeAll": false,
+        "label": "Prometheus",
+        "multi": false,
+        "name": "prometheus",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "PostgreSQL",
+          "value": "postgres"
+        },
+        "hide": 2,
+        "includeAll": false,
+        "label": "PostgreSQL",
+        "multi": false,
+        "name": "postgres",
+        "options": [],
+        "query": "postgres",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "timeRangeUpdatedDuringEditOrView": false,
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
+  "timezone": "",
+  "title": "Twine Solana Geyser Dashboard",
+  "uid": "twine-solana-geyser",
+  "version": 1,
+  "weekStart": ""
+}

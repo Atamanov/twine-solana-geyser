@@ -17,6 +17,7 @@ use crate::airlock::{AirLock, BankHashComponents, BlockMetadata, SlotStatus as A
 use crate::db_writer::{create_pool, spawn_db_writers, DbCommand, DbConfig};
 use crate::metrics::spawn_metrics_server;
 use crate::api::spawn_api_server;
+use crate::rpc_poller::RpcPoller;
 
 pub struct TwineGeyserPlugin {
     config: PluginConfig,
@@ -27,9 +28,11 @@ pub struct TwineGeyserPlugin {
     db_sender: Option<crossbeam::channel::Sender<DbCommand>>,
     metrics_thread: Option<std::thread::JoinHandle<()>>,
     api_thread: Option<std::thread::JoinHandle<()>>,
+    rpc_poller_thread: Option<std::thread::JoinHandle<()>>,
     shutdown_flag: Arc<AtomicBool>,
     monitored_accounts: Arc<parking_lot::RwLock<Vec<Pubkey>>>,
     update_context: Arc<parking_lot::RwLock<Option<Box<dyn MonitoredAccountsContext + Send + Sync>>>>,
+    rpc_poller: Option<Arc<RpcPoller>>,
 }
 
 impl std::fmt::Debug for TwineGeyserPlugin {
@@ -56,6 +59,12 @@ pub struct PluginConfig {
     pub metrics_port: u16,
     #[serde(default = "default_api_port")]
     pub api_port: u16,
+    #[serde(default = "default_rpc_url")]
+    pub rpc_url: String,
+}
+
+fn default_rpc_url() -> String {
+    "http://localhost:8899".to_string()
 }
 
 fn default_metrics_port() -> u16 {
@@ -81,6 +90,7 @@ impl TwineGeyserPlugin {
                 monitored_accounts: Vec::new(),
                 metrics_port: 9090,
                 api_port: 8090,
+                rpc_url: "http://localhost:8899".to_string(),
             },
             airlock: Arc::new(AirLock::new()),
             is_startup_completed: AtomicBool::new(false),
@@ -89,9 +99,11 @@ impl TwineGeyserPlugin {
             db_sender: None,
             metrics_thread: None,
             api_thread: None,
+            rpc_poller_thread: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             monitored_accounts: Arc::new(parking_lot::RwLock::new(Vec::new())),
             update_context: Arc::new(parking_lot::RwLock::new(None)),
+            rpc_poller: None,
         }
     }
 }
@@ -163,6 +175,8 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // Spawn metrics server
         let airlock_clone = self.airlock.clone();
         let metrics_port = self.config.metrics_port;
+        let aggregator_threads = self.config.aggregator_threads;
+        let db_writer_threads = self.config.db_writer_threads;
         let metrics_thread = std::thread::Builder::new()
             .name("twine-metrics".to_string())
             .spawn(move || {
@@ -173,7 +187,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
                 runtime.block_on(async {
                     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], metrics_port));
-                    if let Err(e) = spawn_metrics_server(airlock_clone, addr).await {
+                    if let Err(e) = spawn_metrics_server(airlock_clone, addr, aggregator_threads, db_writer_threads).await {
                         log::error!("Failed to start metrics server: {}", e);
                     }
                 });
@@ -206,6 +220,25 @@ impl GeyserPlugin for TwineGeyserPlugin {
             })
             .expect("Failed to spawn API thread");
         self.api_thread = Some(api_thread);
+        
+        // Spawn RPC poller for network slot updates
+        let rpc_poller = Arc::new(RpcPoller::new(&self.config.rpc_url));
+        self.rpc_poller = Some(rpc_poller.clone());
+        
+        let rpc_poller_thread = std::thread::Builder::new()
+            .name("twine-rpc-poller".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for RPC poller");
+
+                runtime.block_on(async {
+                    rpc_poller.start_polling().await;
+                });
+            })
+            .expect("Failed to spawn RPC poller thread");
+        self.rpc_poller_thread = Some(rpc_poller_thread);
 
         log::info!("Twine Geyser Plugin loaded successfully");
         Ok(())
@@ -299,6 +332,19 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 Err(_) => log::error!("API thread panicked during shutdown"),
             }
         }
+        
+        // Shutdown RPC poller
+        if let Some(poller) = &self.rpc_poller {
+            log::info!("Shutting down RPC poller...");
+            poller.stop();
+        }
+        
+        if let Some(thread) = self.rpc_poller_thread.take() {
+            match thread.join() {
+                Ok(_) => log::debug!("RPC poller thread shut down cleanly"),
+                Err(_) => log::error!("RPC poller thread panicked during shutdown"),
+            }
+        }
 
         // Log final statistics
         let stats = self.airlock.get_stats();
@@ -364,11 +410,18 @@ impl GeyserPlugin for TwineGeyserPlugin {
         _parent: Option<Slot>,
         status: &SlotStatus,
     ) -> PluginResult<()> {
+        // Update validator slot metric
+        crate::metrics::update_validator_slot(slot);
+        
         // Convert status
         let airlock_status = match status {
             SlotStatus::Processed => AirLockSlotStatus::Processed,
             SlotStatus::Confirmed => AirLockSlotStatus::Confirmed,
-            SlotStatus::Rooted => AirLockSlotStatus::Rooted,
+            SlotStatus::Rooted => {
+                // Increment rooted slots counter
+                crate::metrics::increment_slots_rooted();
+                AirLockSlotStatus::Rooted
+            },
             // Handle other statuses as processed
             _ => return Ok(()),
         };
@@ -418,6 +471,9 @@ impl GeyserPlugin for TwineGeyserPlugin {
         let block_info = match blockinfo {
             ReplicaBlockInfoVersions::V0_0_3(info) => info,
             ReplicaBlockInfoVersions::V0_0_4(info) => {
+                // Update metrics with this slot as it's being processed
+                crate::metrics::update_validator_slot(info.slot);
+                
                 // V4 has same fields we need
                 let metadata = BlockMetadata {
                     blockhash: info.blockhash.to_string(),
@@ -430,6 +486,9 @@ impl GeyserPlugin for TwineGeyserPlugin {
             }
             _ => return Ok(()),
         };
+
+        // Update metrics with this slot as it's being processed
+        crate::metrics::update_validator_slot(block_info.slot);
 
         // Create block metadata from v3
         let metadata = BlockMetadata {
