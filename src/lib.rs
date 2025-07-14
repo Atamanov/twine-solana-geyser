@@ -1,32 +1,28 @@
+pub mod aggregator;
 pub mod airlock;
-pub mod api_server;
-pub mod chain_monitor;
-pub mod logging;
-pub mod metrics_server;
-pub mod stake;
-pub mod twine_plugin;
-pub mod worker_pool;
+pub mod db_writer;
+pub mod metrics;
+pub mod plugin;
 
-pub use metrics_server::MetricsServer;
-pub use twine_plugin::TwineGeyserPlugin;
+#[cfg(feature = "tests-only")]
+mod tests;
 
-// Main entry point for the plugin
-#[no_mangle]
+#[cfg(feature = "tests-only")]
+mod test_utils;
+
+#[cfg(feature = "tests-only")]
+mod test_harness;
+
+pub use plugin::TwineGeyserPlugin;
+
+/// Export the plugin entry point
 #[allow(improper_ctypes_definitions)]
-pub unsafe extern "C" fn _create_plugin(
+#[no_mangle]
+
+pub extern "C" fn _create_plugin(
 ) -> *mut dyn agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPlugin {
-    // Initialize basic logging to file for plugin creation
-    // Full logging will be configured in on_load when we have the config
-    logging::init_basic_file_logging("twine-geyser-plugin.log");
-
-    log::info!("Creating Twine Geyser Plugin instance");
-
-    let plugin = TwineGeyserPlugin::default();
+    let plugin = TwineGeyserPlugin::new();
     let plugin: Box<dyn agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPlugin> =
         Box::new(plugin);
-
-    let raw_ptr = Box::into_raw(plugin);
-    log::info!("Twine Geyser Plugin instance created at {:p}", raw_ptr);
-
-    raw_ptr
+    Box::into_raw(plugin)
 }

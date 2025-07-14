@@ -3,61 +3,75 @@ name = "twine-solana-geyser"
 version = "2.0.0"
 edition = "2021"
 authors = ["Twine"]
-description = "A high-performance Geyser plugin with synchronized airlock pattern"
+description = "A high-performance Geyser plugin with synchronized AirLock pattern"
 
 [dependencies]
-# Solana dependencies from agave workspace
+# Solana/Agave dependencies
 solana-sdk = { version = "2.2.2" }
-solana-transaction = { version = "2.2.2" }
 agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
 solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
+solana-accounts-db = { version = "=2.2.18", path = "../agave/accounts-db" }
+solana-vote-program = { version = "=2.2.18", path = "../agave/programs/vote" }
 solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
 
 # Database and async runtime
-tokio = { version = "1", features = ["full"] }
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
 deadpool-postgres = "0.14.1"
 
-# HTTP server for metrics
-axum = "0.8.4"
-reqwest = { version = "=0.12", features = ["json"] }
-actix-web = "4"
-
-# Other dependencies
-log = "0.4"
-env_logger = "0.11"
-clap = { version = "4.5", features = ["derive"], optional = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dashmap = "6.1"
+# Concurrency and performance
+crossbeam = "0.8"
 crossbeam-queue = "0.3"
 crossbeam-channel = "0.5"
+dashmap = "6.1"
 parking_lot = "0.12"
-once_cell = "1.19"
-base58 = "0.2"
+thread_local = "1.1"
+core_affinity = "0.8"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
 bs58 = "0.5"
-chrono = "0.4"
-config = "0.15"
-log4rs = "1.3"
-sysinfo = "0.35"
-bincode = "1.3"
+bytemuck = "1.14"
+bincode = "1.3.3"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Metrics
+prometheus = "0.14"
+axum = "0.8"
 
 [dev-dependencies]
-env_logger = "0.11"
+tempfile = "3.8"
+criterion = { version = "0.5", features = ["html_reports"] }
+uuid = "1.6"
+num_cpus = "1.16"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-default = []
-verify-tool = ["clap"]
+[[bench]]
+name = "airlock_bench"
+harness = false
 
-[[bin]]
-name = "verify_vote_signatures"
-path = "src/bin/verify_vote_signatures.rs"
-required-features = ["verify-tool"]
+[features]
+default = ["geyser-plugin-enhanced-notifications"]
+geyser-plugin-enhanced-notifications = ["agave-geyser-plugin-interface/geyser-plugin-enhanced-notifications"]
+test-no-agave-runtime = []
+postgres-tests = []
+tests-only = []
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
 
 [patch.crates-io]
 agave-geyser-plugin-interface = { version = "=2.2.18", path = "../agave/geyser-plugin-interface", features = ["geyser-plugin-enhanced-notifications"] }
 solana-transaction-status = { version = "=2.2.18", path = "../agave/transaction-status" }
+solana-accounts-db = { version = "=2.2.18", path = "../agave/accounts-db" }
+solana-vote-program = { version = "=2.2.18", path = "../agave/programs/vote" }
 solana-lattice-hash = { version = "=2.2.18", path = "../agave/lattice-hash" }
