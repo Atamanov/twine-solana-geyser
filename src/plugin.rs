@@ -6,15 +6,17 @@ use std::sync::Arc;
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
     ReplicaTransactionInfoVersions, Result as PluginResult, SlotStatus,
+    MonitoredAccountsContext, OwnedAccountChange as GeyserOwnedAccountChange,
 };
 
 use crate::airlock::{OwnedAccountChange, VoteTransaction};
-use solana_sdk::{clock::Slot, transaction::SanitizedTransaction};
+use solana_sdk::{clock::Slot, transaction::SanitizedTransaction, pubkey::Pubkey};
 
 use crate::aggregator::spawn_aggregators;
 use crate::airlock::{AirLock, BankHashComponents, BlockMetadata, SlotStatus as AirLockSlotStatus};
 use crate::db_writer::{create_pool, spawn_db_writers, DbCommand, DbConfig};
 use crate::metrics::spawn_metrics_server;
+use crate::api::spawn_api_server;
 
 pub struct TwineGeyserPlugin {
     config: PluginConfig,
@@ -24,7 +26,10 @@ pub struct TwineGeyserPlugin {
     aggregator_threads: Option<Vec<std::thread::JoinHandle<()>>>,
     db_sender: Option<crossbeam::channel::Sender<DbCommand>>,
     metrics_thread: Option<std::thread::JoinHandle<()>>,
+    api_thread: Option<std::thread::JoinHandle<()>>,
     shutdown_flag: Arc<AtomicBool>,
+    monitored_accounts: Arc<parking_lot::RwLock<Vec<Pubkey>>>,
+    update_context: Arc<parking_lot::RwLock<Option<Box<dyn MonitoredAccountsContext + Send + Sync>>>>,
 }
 
 impl std::fmt::Debug for TwineGeyserPlugin {
@@ -49,10 +54,16 @@ pub struct PluginConfig {
     pub monitored_accounts: Vec<String>,
     #[serde(default = "default_metrics_port")]
     pub metrics_port: u16,
+    #[serde(default = "default_api_port")]
+    pub api_port: u16,
 }
 
 fn default_metrics_port() -> u16 {
     9090
+}
+
+fn default_api_port() -> u16 {
+    8090
 }
 
 impl TwineGeyserPlugin {
@@ -69,6 +80,7 @@ impl TwineGeyserPlugin {
                 aggregator_threads: 2,
                 monitored_accounts: Vec::new(),
                 metrics_port: 9090,
+                api_port: 8090,
             },
             airlock: Arc::new(AirLock::new()),
             is_startup_completed: AtomicBool::new(false),
@@ -76,7 +88,10 @@ impl TwineGeyserPlugin {
             aggregator_threads: None,
             db_sender: None,
             metrics_thread: None,
+            api_thread: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            monitored_accounts: Arc::new(parking_lot::RwLock::new(Vec::new())),
+            update_context: Arc::new(parking_lot::RwLock::new(None)),
         }
     }
 }
@@ -104,6 +119,18 @@ impl GeyserPlugin for TwineGeyserPlugin {
                 msg: format!("Failed to parse config file: {}", e),
             }
         })?;
+        
+        // Parse monitored accounts
+        let mut monitored_pubkeys = Vec::new();
+        for account_str in &self.config.monitored_accounts {
+            match account_str.parse::<Pubkey>() {
+                Ok(pubkey) => monitored_pubkeys.push(pubkey),
+                Err(e) => {
+                    log::warn!("Failed to parse monitored account '{}': {}", account_str, e);
+                }
+            }
+        }
+        *self.monitored_accounts.write() = monitored_pubkeys;
 
         // Create database pool
         let db_config = DbConfig {
@@ -153,6 +180,32 @@ impl GeyserPlugin for TwineGeyserPlugin {
             })
             .expect("Failed to spawn metrics thread");
         self.metrics_thread = Some(metrics_thread);
+        
+        // Spawn API server for dynamic account updates
+        let monitored_accounts_clone = self.monitored_accounts.clone();
+        let update_context_clone = self.update_context.clone();
+        let api_port = self.config.api_port;
+        let api_thread = std::thread::Builder::new()
+            .name("twine-api".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Failed to create tokio runtime for API");
+
+                runtime.block_on(async {
+                    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], api_port));
+                    if let Err(e) = spawn_api_server(
+                        monitored_accounts_clone,
+                        update_context_clone,
+                        addr
+                    ).await {
+                        log::error!("Failed to start API server: {}", e);
+                    }
+                });
+            })
+            .expect("Failed to spawn API thread");
+        self.api_thread = Some(api_thread);
 
         log::info!("Twine Geyser Plugin loaded successfully");
         Ok(())
@@ -235,6 +288,15 @@ impl GeyserPlugin for TwineGeyserPlugin {
             match thread.join() {
                 Ok(_) => log::debug!("Metrics thread shut down cleanly"),
                 Err(_) => log::error!("Metrics thread panicked during shutdown"),
+            }
+        }
+        
+        // Shutdown API thread
+        if let Some(thread) = self.api_thread.take() {
+            log::info!("Shutting down API server...");
+            match thread.join() {
+                Ok(_) => log::debug!("API thread shut down cleanly"),
+                Err(_) => log::error!("API thread panicked during shutdown"),
             }
         }
 
@@ -391,6 +453,36 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
     fn entry_notifications_enabled(&self) -> bool {
         false
+    }
+    
+    fn notify_account_change(&self, account_change: GeyserOwnedAccountChange) -> PluginResult<()> {
+        // Convert to our OwnedAccountChange type and process
+        let change = OwnedAccountChange {
+            pubkey: account_change.pubkey,
+            slot: account_change.slot,
+            old_account: account_change.old_account,
+            new_account: account_change.new_account,
+            old_lthash: account_change.old_lthash,
+            new_lthash: account_change.new_lthash,
+        };
+        
+        // Use our existing notify_account_changes method
+        self.notify_account_changes(account_change.slot, vec![change]);
+        Ok(())
+    }
+    
+    fn account_change_notifications_enabled(&self) -> bool {
+        true
+    }
+    
+    fn setup_monitored_accounts(&self, context: &dyn MonitoredAccountsContext) -> PluginResult<()> {
+        let accounts = self.monitored_accounts.read().clone();
+        context.set_monitored_accounts(accounts)?;
+        Ok(())
+    }
+    
+    fn set_update_context(&mut self, context: Box<dyn MonitoredAccountsContext + Send + Sync>) {
+        *self.update_context.write() = Some(context);
     }
 }
 

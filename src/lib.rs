@@ -1,5 +1,6 @@
 pub mod aggregator;
 pub mod airlock;
+pub mod api;
 pub mod db_writer;
 pub mod metrics;
 pub mod plugin;
