@@ -46,7 +46,6 @@ struct VoteDetails {
 }
 
 /// Main plugin state
-#[derive(Debug)]
 pub struct TwineGeyserPlugin {
     /// Primary buffer for all in-flight slot data
     airlock: Arc<DashMap<u64, Arc<AirlockSlotData>>>,
@@ -86,11 +85,25 @@ pub struct TwineGeyserPlugin {
     /// Handle for cleanup task
     cleanup_task: Option<tokio::task::JoinHandle<()>>,
     /// Context for dynamically updating monitored accounts
-    update_context: Option<Box<dyn MonitoredAccountsContext + Send + Sync>>,
+    update_context: Option<Arc<Box<dyn MonitoredAccountsContext + Send + Sync>>>,
     /// Channel for receiving account update notifications from API
     account_update_receiver: Option<Receiver<()>>,
     /// Task handle for account update listener
     account_update_task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for TwineGeyserPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwineGeyserPlugin")
+            .field("monitored_accounts_count", &self.monitored_accounts.len())
+            .field("has_monitored_accounts", &self.has_monitored_accounts)
+            .field("config", &self.config)
+            .field("last_proof_scheduling_slot", &self.last_proof_scheduling_slot)
+            .field("last_stats_log_slot", &self.last_stats_log_slot)
+            .field("current_epoch", &self.current_epoch)
+            .field("update_context_present", &self.update_context.is_some())
+            .finish()
+    }
 }
 
 impl Default for TwineGeyserPlugin {
@@ -275,6 +288,11 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         // Stop cleanup task
         if let Some(handle) = self.cleanup_task.take() {
+            handle.abort();
+        }
+        
+        // Stop account update task
+        if let Some(handle) = self.account_update_task.take() {
             handle.abort();
         }
         
@@ -596,7 +614,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
     fn set_update_context(&mut self, context: Box<dyn MonitoredAccountsContext + Send + Sync>) {
         info!("Setting update context for dynamic monitored accounts updates");
-        self.update_context = Some(context);
+        self.update_context = Some(Arc::new(context));
         
         // Start the account update listener task
         self.start_account_update_listener();
@@ -613,7 +631,7 @@ impl TwineGeyserPlugin {
                 .collect();
             
             info!("Dynamically updating {} monitored accounts with plugin manager", accounts.len());
-            context.set_monitored_accounts(accounts)?;
+            context.as_ref().set_monitored_accounts(accounts)?;
         } else {
             warn!("Update context not available - cannot dynamically update monitored accounts");
         }
@@ -1499,6 +1517,43 @@ impl TwineGeyserPlugin {
         self.cleanup_task = Some(handle);
     }
     
+    fn start_account_update_listener(&mut self) {
+        if let (Some(runtime), Some(receiver)) = (self.runtime.as_ref(), self.account_update_receiver.take()) {
+            let update_context = self.update_context.clone();
+            let monitored_accounts = self.monitored_accounts.clone();
+            
+            let handle = runtime.spawn(async move {
+                info!("Starting account update listener task");
+                
+                loop {
+                    match receiver.recv() {
+                        Ok(()) => {
+                            // Update request received
+                            if let Some(context) = &update_context {
+                                let accounts: Vec<Pubkey> = monitored_accounts
+                                    .iter()
+                                    .map(|entry| *entry.key())
+                                    .collect();
+                                
+                                info!("Dynamically updating {} monitored accounts with plugin manager", accounts.len());
+                                
+                                if let Err(e) = context.as_ref().set_monitored_accounts(accounts) {
+                                    error!("Failed to update monitored accounts: {:?}", e);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            info!("Account update channel closed, stopping listener");
+                            break;
+                        }
+                    }
+                }
+            });
+            
+            self.account_update_task = Some(handle);
+        }
+    }
+    
     fn start_api_server(&mut self) {
         let monitored_accounts = self.monitored_accounts.clone();
         let config = match self.config.as_ref() {
@@ -1522,8 +1577,12 @@ impl TwineGeyserPlugin {
             config.db_host, config.db_port, config.db_user, config.db_password, config.db_name
         );
 
+        // Create channel for account update notifications
+        let (tx, rx) = crossbeam_channel::unbounded();
+        self.account_update_receiver = Some(rx);
+
         // API server starts in its own thread
-        let handle = crate::api_server::start_api_server(monitored_accounts, api_port, db_config);
+        let handle = crate::api_server::start_api_server(monitored_accounts, api_port, db_config, Some(tx));
         self.api_server = Some(handle);
     }
     
