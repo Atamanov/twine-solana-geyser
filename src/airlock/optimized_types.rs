@@ -1,6 +1,7 @@
 use crossbeam_queue::SegQueue;
 use parking_lot::RwLock;
 use solana_sdk::pubkey::Pubkey;
+use solana_sdk::account::ReadableAccount;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -9,14 +10,7 @@ use std::time::Instant;
 use crate::airlock::types::{
     BankHashComponentsInfo, VoteTransaction,
 };
-
-/// Our internal account change representation
-#[derive(Debug, Clone)]
-pub struct InternalAccountChange {
-    pub pubkey: Pubkey,
-    pub slot: u64,
-    pub is_startup: bool,
-}
+use agave_geyser_plugin_interface::geyser_plugin_interface::OwnedAccountChange;
 
 // Thread-local buffer for accumulating changes without synchronization
 thread_local! {
@@ -32,16 +26,30 @@ pub struct LocalBuffer {
     last_flush: Instant,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LocalSlotBuffer {
-    /// Account changes accumulated in this thread
-    pub account_changes: Vec<InternalAccountChange>,
+    /// Account changes accumulated in this thread - stores the full OwnedAccountChange
+    pub account_changes: Vec<OwnedAccountChange>,
     /// Vote transactions seen by this thread
     pub vote_transactions: Vec<VoteTransaction>,
     /// Whether any monitored account was seen
     pub has_monitored: bool,
     /// Approximate memory usage
     pub memory_usage: usize,
+}
+
+impl Default for LocalSlotBuffer {
+    fn default() -> Self {
+        Self {
+            // Pre-allocate for high-throughput scenarios
+            // 2048 accounts to handle 1024+ with headroom for bursts
+            account_changes: Vec::with_capacity(2048),
+            // 512 votes to handle 300+ with headroom
+            vote_transactions: Vec::with_capacity(512),
+            has_monitored: false,
+            memory_usage: 0,
+        }
+    }
 }
 
 impl LocalBuffer {
@@ -53,13 +61,14 @@ impl LocalBuffer {
     }
 
     /// Add an account change to the thread-local buffer
-    pub fn add_account_change(slot: u64, change: InternalAccountChange, is_monitored: bool) {
+    pub fn add_account_change(slot: u64, change: OwnedAccountChange, is_monitored: bool) {
         LOCAL_BUFFER.with(|buffer| {
             let mut buf = buffer.borrow_mut();
             let slot_buf = buf.slots.entry(slot).or_default();
             
-            // Track memory usage for backpressure
-            slot_buf.memory_usage += std::mem::size_of::<InternalAccountChange>();
+            // Track memory usage for backpressure (include account data size)
+            let data_size = change.old_account.data().len() + change.new_account.data().len();
+            slot_buf.memory_usage += std::mem::size_of::<OwnedAccountChange>() + data_size;
             slot_buf.has_monitored |= is_monitored;
             slot_buf.account_changes.push(change);
             
@@ -102,7 +111,25 @@ impl LocalBuffer {
     fn cleanup_old_slots(&mut self) {
         // Remove slots older than 100 slots (conservative to avoid data loss)
         if let Some(max_slot) = self.slots.keys().max().copied() {
-            self.slots.retain(|&slot, _| max_slot.saturating_sub(slot) < 100);
+            let mut removed = 0;
+            self.slots.retain(|&slot, buffer| {
+                let should_keep = max_slot.saturating_sub(slot) < 100;
+                if !should_keep {
+                    removed += 1;
+                    // Clear vectors to free memory immediately
+                    drop(std::mem::take(&mut buffer.account_changes));
+                    drop(std::mem::take(&mut buffer.vote_transactions));
+                }
+                should_keep
+            });
+            
+            if removed > 0 {
+                log::debug!("Cleaned up {} old slot buffers", removed);
+                // Shrink the HashMap if it's getting too sparse
+                if self.slots.len() < self.slots.capacity() / 4 {
+                    self.slots.shrink_to_fit();
+                }
+            }
         }
     }
 }
@@ -120,7 +147,7 @@ pub struct OptimizedSlotData {
     pub metadata: OptimisticMetadata,
     
     /// Aggregated account changes (populated during flush)
-    pub account_changes: RwLock<Option<Vec<InternalAccountChange>>>,
+    pub account_changes: RwLock<Option<Vec<OwnedAccountChange>>>,
     
     /// Lifecycle tracking
     pub lifecycle: SlotLifecycle,

@@ -4,6 +4,7 @@ use chrono;
 use crossbeam_channel::Receiver;
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use log::*;
+use solana_sdk::account::ReadableAccount;
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Runtime;
@@ -47,7 +48,9 @@ impl WorkerPool {
             handles.push(handle);
         }
 
-        stats.worker_pool_size.store(worker_count, Ordering::Relaxed);
+        stats
+            .worker_pool_size
+            .store(worker_count, Ordering::Relaxed);
 
         WorkerPool { handles }
     }
@@ -74,7 +77,10 @@ async fn worker_loop(
     let config = match connection_string.parse::<tokio_postgres::Config>() {
         Ok(cfg) => cfg,
         Err(e) => {
-            error!("Worker {}: Failed to parse connection string: {}", worker_id, e);
+            error!(
+                "Worker {}: Failed to parse connection string: {}",
+                worker_id, e
+            );
             return;
         }
     };
@@ -105,7 +111,7 @@ async fn worker_loop(
                     DbWriteCommand::AccountChanges { .. } => batch_changes.push(cmd),
                     DbWriteCommand::ProofRequests { .. } => {
                         // Proof requests are no longer processed by the geyser plugin
-                        debug!("Ignoring proof request command");
+                        error!("Ignoring proof request command");
                     }
                     DbWriteCommand::EpochStakes { .. } => batch_epoch_stakes.push(cmd),
                     DbWriteCommand::StakeAccountChange { .. } => batch_stake_accounts.push(cmd),
@@ -270,7 +276,10 @@ async fn flush_batches(
             for cmd in batch_changes.drain(..) {
                 if let DbWriteCommand::AccountChanges { slot, changes } = cmd {
                     if let Err(e) = write_account_changes(&transaction, slot, &changes).await {
-                        error!("Worker {}: Failed to write account changes: {}", worker_id, e);
+                        error!(
+                            "Worker {}: Failed to write account changes: {}",
+                            worker_id, e
+                        );
                         stats.db_batch_error_count.fetch_add(1, Ordering::Relaxed);
                         let _ = transaction.rollback().await;
                         return;
@@ -290,7 +299,9 @@ async fn flush_batches(
                         worker_id, total_items, elapsed
                     );
                     stats.db_batch_success_count.fetch_add(1, Ordering::Relaxed);
-                    stats.queue_throughput.fetch_add(total_items, Ordering::Relaxed);
+                    stats
+                        .queue_throughput
+                        .fetch_add(total_items, Ordering::Relaxed);
                 }
                 Err(e) => {
                     error!("Worker {}: Failed to commit transaction: {}", worker_id, e);
@@ -299,7 +310,10 @@ async fn flush_batches(
             }
         }
         Err(e) => {
-            error!("Worker {}: Failed to get database connection: {}", worker_id, e);
+            error!(
+                "Worker {}: Failed to get database connection: {}",
+                worker_id, e
+            );
             stats.db_batch_error_count.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -390,23 +404,68 @@ async fn write_slot_data(
 async fn write_account_changes(
     client: &tokio_postgres::Transaction<'_>,
     slot: u64,
-    changes: &[crate::airlock::optimized_types::InternalAccountChange],
+    changes: &[agave_geyser_plugin_interface::geyser_plugin_interface::OwnedAccountChange],
 ) -> Result<(), tokio_postgres::Error> {
-    for change in changes {
-        client
-            .execute(
-                "INSERT INTO account_changes (
-                    slot, pubkey, is_startup, created_at
-                ) VALUES ($1, $2, $3, $4)",
-                &[
-                    &(slot as i64),
-                    &change.pubkey.to_string(),
-                    &change.is_startup,
-                    &chrono::Utc::now(),
-                ],
-            )
-            .await?;
+    if changes.is_empty() {
+        return Ok(());
     }
+
+    // Prepare statement once for the batch
+    let stmt = client
+        .prepare(
+            "INSERT INTO account_changes (
+        slot, pubkey, 
+        old_lamports, new_lamports,
+        old_owner, new_owner,
+        old_executable, new_executable,
+        old_rent_epoch, new_rent_epoch,
+        old_data, new_data,
+        old_data_len, new_data_len,
+        created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        )
+        .await?;
+
+    let now = chrono::Utc::now();
+
+    // Process in chunks to avoid overwhelming the database
+    const CHUNK_SIZE: usize = 500;
+    for chunk in changes.chunks(CHUNK_SIZE) {
+        for change in chunk {
+            client
+                .execute(
+                    &stmt,
+                    &[
+                        &(slot as i64),
+                        &change.pubkey.to_string(),
+                        &(change.old_account.lamports() as i64),
+                        &(change.new_account.lamports() as i64),
+                        &change.old_account.owner().to_string(),
+                        &change.new_account.owner().to_string(),
+                        &change.old_account.executable(),
+                        &change.new_account.executable(),
+                        &(change.old_account.rent_epoch() as i64),
+                        &(change.new_account.rent_epoch() as i64),
+                        &change.old_account.data(),
+                        &change.new_account.data(),
+                        &(change.old_account.data().len() as i64),
+                        &(change.new_account.data().len() as i64),
+                        &now,
+                    ],
+                )
+                .await?;
+        }
+
+        // Log progress for large batches
+        if changes.len() > CHUNK_SIZE {
+            debug!(
+                "Processed {} account changes for slot {}",
+                chunk.len(),
+                slot
+            );
+        }
+    }
+
     Ok(())
 }
 

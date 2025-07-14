@@ -213,7 +213,7 @@ pub enum DbWriteCommand {
     },
     AccountChanges {
         slot: u64,
-        changes: Vec<crate::airlock::optimized_types::InternalAccountChange>,
+        changes: Vec<OwnedAccountChange>,
     },
     ProofRequests {
         // NOTE: Proof requests are no longer processed by the geyser plugin

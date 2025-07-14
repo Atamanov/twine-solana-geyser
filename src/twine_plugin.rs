@@ -257,12 +257,24 @@ impl TwineGeyserPlugin {
                 for slot in slots_to_remove {
                     if let Some((_, slot_data)) = slots.remove(&slot) {
                         let mem_usage = slot_data.memory_tracker.get();
+                        
+                        // Explicitly drop large data structures to free memory
+                        if let Some(changes) = slot_data.account_changes.write().take() {
+                            info!("Dropping {} account changes for slot {}", changes.len(), slot);
+                            drop(changes);
+                        }
+                        
+                        // Collect and drop all votes
+                        let votes = slot_data.votes.collect_all();
+                        info!("Dropping {} votes for slot {}", votes.len(), slot);
+                        drop(votes);
+                        
                         global_mem.fetch_sub(mem_usage, Ordering::AcqRel);
                         stats.slots_cleaned.fetch_add(1, Ordering::Relaxed);
                         stats.slots_in_memory.fetch_sub(1, Ordering::Relaxed);
                         stats.slots_deleted_total.fetch_add(1, Ordering::Relaxed);
                         
-                        debug!("Cleaned up slot {} (memory: {} bytes)", slot, mem_usage);
+                        info!("Cleaned up slot {} (memory: {} bytes)", slot, mem_usage);
                     }
                 }
             }
@@ -290,9 +302,16 @@ impl TwineGeyserPlugin {
             if local.has_monitored {
                 let mut changes = slot_data.account_changes.write();
                 if changes.is_none() {
-                    *changes = Some(Vec::with_capacity(num_changes));
+                    // Pre-allocate with extra capacity for multiple thread buffers
+                    // Assume ~8 threads contributing, each with up to 2048 accounts
+                    *changes = Some(Vec::with_capacity(num_changes.max(4096)));
                 }
                 if let Some(ref mut vec) = *changes {
+                    // Reserve additional capacity if needed to avoid reallocation
+                    let needed_capacity = vec.len() + num_changes;
+                    if vec.capacity() < needed_capacity {
+                        vec.reserve(needed_capacity - vec.len());
+                    }
                     vec.extend(local.account_changes);
                 }
                 slot_data.mark_monitored();
@@ -369,7 +388,7 @@ impl TwineGeyserPlugin {
                         Err(TrySendError::Full(_)) => {
                             // Queue is full, put slot back and stop processing
                             self.pending_writes.push(slot);
-                            debug!("DB writer queue full, applying backpressure");
+                            info!("DB writer queue full, applying backpressure");
                             break;
                         }
                         Err(TrySendError::Disconnected(_)) => {
@@ -712,7 +731,6 @@ impl GeyserPlugin for TwineGeyserPlugin {
         &self,
         account_change: OwnedAccountChange,
     ) -> PluginResult<()> {
-        let pubkey = account_change.pubkey;
         let slot = account_change.slot;
         
         // NOTE: We do NOT check if account is monitored here for performance reasons.
@@ -723,15 +741,9 @@ impl GeyserPlugin for TwineGeyserPlugin {
         
         slot_data.lifecycle.inc_writers();
 
-        // Convert OwnedAccountChange to our internal format
-        let our_change = crate::airlock::optimized_types::InternalAccountChange {
-            pubkey,
-            slot,
-            is_startup: false, // Not available in enhanced API
-        };
-
+        // Pass the OwnedAccountChange directly - we take ownership of Agave's copy
         // Always treat as monitored=true to capture all account changes
-        LocalBuffer::add_account_change(slot, our_change, true);
+        LocalBuffer::add_account_change(slot, account_change, true);
         slot_data.mark_monitored();
 
         // Update stats for all account changes
@@ -796,7 +808,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
         components: agave_geyser_plugin_interface::geyser_plugin_interface::BankHashComponentsInfo,
     ) -> PluginResult<()> {
         let slot = components.slot;
-        debug!("Received bank hash components for slot {}", slot);
+        info!("Received bank hash components for slot {}", slot);
         
         let slot_data = self.get_or_create_slot(slot)?;
         
