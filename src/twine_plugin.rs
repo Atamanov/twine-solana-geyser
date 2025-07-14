@@ -9,7 +9,8 @@ use agave_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, Result as PluginResult, SlotStatus,
     ReplicaTransactionInfoVersions,
 };
-use crossbeam_channel::{bounded, Sender};
+use agave_geyser_plugin_interface::geyser_plugin_interface::MonitoredAccountsContext;
+use crossbeam_channel::{bounded, Sender, Receiver};
 use dashmap::{DashMap, DashSet};
 use log::*;
 use solana_sdk::pubkey::Pubkey;
@@ -84,6 +85,12 @@ pub struct TwineGeyserPlugin {
     cleanup_queue: Arc<Mutex<VecDeque<(u64, Instant)>>>,
     /// Handle for cleanup task
     cleanup_task: Option<tokio::task::JoinHandle<()>>,
+    /// Context for dynamically updating monitored accounts
+    update_context: Option<Box<dyn MonitoredAccountsContext + Send + Sync>>,
+    /// Channel for receiving account update notifications from API
+    account_update_receiver: Option<Receiver<()>>,
+    /// Task handle for account update listener
+    account_update_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Default for TwineGeyserPlugin {
@@ -108,6 +115,7 @@ impl Default for TwineGeyserPlugin {
             epoch_stake_accumulator: Arc::new(DashMap::new()),
             cleanup_queue: Arc::new(Mutex::new(VecDeque::new())),
             cleanup_task: None,
+            update_context: None,
         }
     }
 }
@@ -568,9 +576,45 @@ impl GeyserPlugin for TwineGeyserPlugin {
     fn transaction_notifications_enabled(&self) -> bool {
         true
     }
+
+    fn setup_monitored_accounts(&self, context: &dyn MonitoredAccountsContext) -> PluginResult<()> {
+        // Get monitored accounts from our internal store
+        let accounts: Vec<Pubkey> = self.monitored_accounts
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+        
+        info!("Setting up {} monitored accounts with plugin manager", accounts.len());
+        
+        // Set monitored accounts through the context
+        context.set_monitored_accounts(accounts)?;
+        
+        Ok(())
+    }
+
+    fn set_update_context(&mut self, context: Box<dyn MonitoredAccountsContext + Send + Sync>) {
+        info!("Setting update context for dynamic monitored accounts updates");
+        self.update_context = Some(context);
+    }
 }
 
 impl TwineGeyserPlugin {
+    /// Update the monitored accounts list with the plugin manager
+    pub fn update_monitored_accounts_with_context(&self) -> PluginResult<()> {
+        if let Some(context) = &self.update_context {
+            let accounts: Vec<Pubkey> = self.monitored_accounts
+                .iter()
+                .map(|entry| *entry.key())
+                .collect();
+            
+            info!("Dynamically updating {} monitored accounts with plugin manager", accounts.len());
+            context.set_monitored_accounts(accounts)?;
+        } else {
+            warn!("Update context not available - cannot dynamically update monitored accounts");
+        }
+        Ok(())
+    }
+
     fn process_transaction_info(
         &self,
         signature: &Signature,
