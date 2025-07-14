@@ -36,7 +36,7 @@ pub struct OwnedReplicaAccountInfo {
 
 // Re-export types from agave geyser plugin interface
 pub use agave_geyser_plugin_interface::geyser_plugin_interface::{
-    BankHashComponentsInfo, OwnedAccountChange, ReplicaAccountInfo, ReplicaAccountInfoV2,
+    AccountChangeDescriptor, BankHashComponentsInfo, OwnedAccountChange, ReplicaAccountInfo, ReplicaAccountInfoV2,
     ReplicaAccountInfoV3, ReplicaAccountInfoVersions, ReplicaBlockInfo, ReplicaBlockInfoVersions,
     ReplicaEntryInfo, ReplicaEntryInfoV2, ReplicaEntryInfoVersions, ReplicaTransactionInfo,
     ReplicaTransactionInfoVersions,
@@ -96,6 +96,8 @@ pub struct AirlockSlotData {
     /// Per-thread buffers to eliminate contention - indexed by thread ID
     /// Using a fixed-size array would be better but ThreadId is opaque
     pub thread_buffers: DashMap<std::thread::ThreadId, Vec<OwnedAccountChange>>,
+    /// Per-thread descriptor buffers - stores all descriptors until we know if we need full data
+    pub descriptor_buffers: DashMap<std::thread::ThreadId, Vec<AccountChangeDescriptor>>,
     /// Tracks if a monitored account was seen in this slot
     pub contains_monitored_change: AtomicBool,
     /// Bank hash components (may arrive at any time)
@@ -135,6 +137,7 @@ impl AirlockSlotData {
         Self {
             writer_count: AtomicU32::new(0),
             thread_buffers: DashMap::with_capacity(32), // Pre-size for typical thread count
+            descriptor_buffers: DashMap::with_capacity(32),
             contains_monitored_change: AtomicBool::new(false),
             bank_hash_components: parking_lot::RwLock::new(None),
             delta_lthash: parking_lot::RwLock::new(None),

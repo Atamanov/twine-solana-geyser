@@ -7,7 +7,7 @@ use crate::airlock::{AirlockStats, AirlockStatsSnapshot};
 use crate::stake::{self, StakeAccountInfo, slot_to_epoch, get_epoch_boundaries};
 use agave_geyser_plugin_interface::geyser_plugin_interface::{
     GeyserPlugin, GeyserPluginError, Result as PluginResult, SlotStatus,
-    ReplicaTransactionInfoVersions,
+    ReplicaTransactionInfoVersions, AccountChangeDescriptor, GeyserEnhancedNotifier,
 };
 use crossbeam_channel::{bounded, Sender};
 use dashmap::{DashMap, DashSet};
@@ -84,6 +84,8 @@ pub struct TwineGeyserPlugin {
     cleanup_queue: Arc<Mutex<VecDeque<(u64, Instant)>>>,
     /// Handle for cleanup task
     cleanup_task: Option<tokio::task::JoinHandle<()>>,
+    /// Reference to the enhanced notifier for requesting full account data
+    enhanced_notifier: Option<Arc<dyn GeyserEnhancedNotifier>>,
 }
 
 impl Default for TwineGeyserPlugin {
@@ -108,7 +110,14 @@ impl Default for TwineGeyserPlugin {
             epoch_stake_accumulator: Arc::new(DashMap::new()),
             cleanup_queue: Arc::new(Mutex::new(VecDeque::new())),
             cleanup_task: None,
+            enhanced_notifier: None,
         }
+    }
+}
+
+impl TwineGeyserPlugin {
+    pub fn set_enhanced_notifier(&mut self, notifier: Arc<dyn GeyserEnhancedNotifier>) {
+        self.enhanced_notifier = Some(notifier);
     }
 }
 
@@ -286,6 +295,33 @@ impl GeyserPlugin for TwineGeyserPlugin {
         }
     }
 
+    fn notify_account_change_descriptor(&self, descriptor: AccountChangeDescriptor) -> PluginResult<()> {
+        let slot = descriptor.slot;
+        
+        // Get or create slot data
+        let slot_data = self.airlock
+            .entry(slot)
+            .or_insert_with(|| Arc::new(AirlockSlotData::new()))
+            .clone();
+        
+        // Store descriptor for this slot
+        let thread_id = std::thread::current().id();
+        let mut buffer_entry = slot_data.descriptor_buffers
+            .entry(thread_id)
+            .or_insert_with(|| Vec::with_capacity(1000));
+        buffer_entry.push(descriptor.clone());
+        
+        // Check if this is a monitored account
+        if self.has_monitored_accounts.load(Ordering::Relaxed) && 
+           self.monitored_accounts.contains(&descriptor.pubkey) {
+            slot_data.contains_monitored_change.store(true, Ordering::Release);
+            self.pending_proofs_for_scheduling.insert(descriptor.pubkey, slot);
+            self.stats.monitored_account_changes.fetch_add(1, Ordering::Relaxed);
+        }
+        
+        Ok(())
+    }
+
     fn notify_account_change(&self, account_change: OwnedAccountChange) -> PluginResult<()> {
         debug!("Received account change for slot {}, ", account_change.slot);
         let slot = account_change.slot;
@@ -354,38 +390,24 @@ impl GeyserPlugin for TwineGeyserPlugin {
         // track active writers
         slot_data.writer_count.fetch_add(1, Ordering::AcqRel);
 
-        // Quick check: if no monitored accounts at all, skip expensive lookup
-        if !self.has_monitored_accounts.load(Ordering::Relaxed) {
-            // Still need to buffer the change
-            let thread_id = std::thread::current().id();
-            slot_data.thread_buffers.entry(thread_id)
-                .or_insert_with(|| Vec::with_capacity(1000))
-                .push(account_change);
-            // Atomically decrement writer count
-        slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
-            return Ok(());
-        }
-        
-        // Check if this is a monitored account
+        // This is now only called for monitored accounts, so we know it's monitored
         let pubkey = account_change.pubkey;
-        let is_monitored = self.monitored_accounts.contains(&pubkey);
         
         // Get or create thread-local buffer for this slot
         let thread_id = std::thread::current().id();
         slot_data.thread_buffers.entry(thread_id)
-            .or_insert_with(|| Vec::with_capacity(1000)) // mainnet slots can have 50k+ updates
+            .or_insert_with(|| Vec::with_capacity(100)) // Much smaller since only monitored accounts
             .push(account_change);
         
-        if is_monitored {
-            slot_data
-                .contains_monitored_change
-                .store(true, Ordering::Release);
-            self.pending_proofs_for_scheduling
-                .insert(pubkey, slot);
-            self.stats
-                .monitored_account_changes
-                .fetch_add(1, Ordering::Relaxed);
-        }
+        // Mark that this slot contains monitored changes
+        slot_data
+            .contains_monitored_change
+            .store(true, Ordering::Release);
+        self.pending_proofs_for_scheduling
+            .insert(pubkey, slot);
+        self.stats
+            .monitored_account_changes
+            .fetch_add(1, Ordering::Relaxed);
 
         // Atomically decrement writer count
         slot_data.writer_count.fetch_sub(1, Ordering::AcqRel);
@@ -877,42 +899,62 @@ impl TwineGeyserPlugin {
         if slot_data.contains_monitored_change.load(Ordering::Acquire) {
             debug!("Monitored account change detected, saving ALL account changes for slot {}", slot);
             
-            // Consolidate all thread buffers
-            let mut all_changes = Vec::new();
-            for entry in slot_data.thread_buffers.iter() {
-                all_changes.extend_from_slice(entry.value());
+            // Consolidate all descriptor buffers
+            let mut all_descriptors = Vec::new();
+            for entry in slot_data.descriptor_buffers.iter() {
+                all_descriptors.extend_from_slice(entry.value());
             }
-            slot_data.thread_buffers.clear();
+            slot_data.descriptor_buffers.clear();
             
-            if !all_changes.is_empty() {
-                let change_count = all_changes.len();
-                let monitored_count = all_changes.iter()
-                    .filter(|c| self.monitored_accounts.contains(&c.pubkey))
-                    .count();
-                    
-                queue
-                    .send(DbWriteCommand::AccountChanges {
-                        slot,
-                        changes: all_changes,
-                    })
-                    .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
+            if !all_descriptors.is_empty() {
+                // Now we need to fetch full data for ALL accounts in this slot
+                let mut all_changes = Vec::new();
+                let mut fetch_failures = 0;
                 
-                self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
-                self.stats
-                    .slots_with_monitored_accounts
-                    .fetch_add(1, Ordering::Relaxed);
-                debug!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
+                if let Some(ref notifier) = self.enhanced_notifier {
+                    for descriptor in all_descriptors {
+                        if let Some(account_change) = notifier.request_account_change_data(descriptor) {
+                            all_changes.push(account_change);
+                        } else {
+                            fetch_failures += 1;
+                        }
+                    }
+                }
+                
+                if fetch_failures > 0 {
+                    warn!("Failed to fetch {} account changes for slot {}", fetch_failures, slot);
+                }
+                
+                if !all_changes.is_empty() {
+                    let change_count = all_changes.len();
+                    let monitored_count = all_changes.iter()
+                        .filter(|c| self.monitored_accounts.contains(&c.pubkey))
+                        .count();
+                        
+                    queue
+                        .send(DbWriteCommand::AccountChanges {
+                            slot,
+                            changes: all_changes,
+                        })
+                        .map_err(|_| GeyserPluginError::Custom("Failed to send account changes".into()))?;
+                    
+                    self.stats.db_writes.fetch_add(1, Ordering::Relaxed);
+                    self.stats
+                        .slots_with_monitored_accounts
+                        .fetch_add(1, Ordering::Relaxed);
+                    debug!("Saved {} account changes for slot {} ({} monitored)", change_count, slot, monitored_count);
+                }
             }
         } else {
             // discard unmonitored data
             let mut discarded_count = 0;
-            for mut entry in slot_data.thread_buffers.iter_mut() {
+            for mut entry in slot_data.descriptor_buffers.iter_mut() {
                 discarded_count += entry.value().len();
                 entry.value_mut().clear();
             }
-            slot_data.thread_buffers.clear();
+            slot_data.descriptor_buffers.clear();
             if discarded_count > 0 {
-                debug!("Discarded {} account changes for slot {} (no monitored accounts)", discarded_count, slot);
+                debug!("Discarded {} account descriptors for slot {} (no monitored accounts)", discarded_count, slot);
             }
         }
 
