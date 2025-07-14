@@ -103,14 +103,11 @@ services:
     volumes:
       - ./scripts/import-library-panels.sh:/import-library-panels.sh:ro
       - ./config/grafana/provisioning/library_panels:/etc/grafana/provisioning/library_panels:ro
+      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:rw
     networks:
       - twine-network
     command: >
-      sh -c "apk add --no-cache jq && \
-             rm /etc/grafana/provisioning/dashboards/dashboards.yml && \
-             sleep 5 && \
-             cp /etc/grafana/provisioning/dashboards/dashboards.yml.bak /etc/grafana/provisioning/dashboards/dashboards.yml && \
-             sh /import-library-panels.sh"
+      sh -c "apk add --no-cache jq && sh /import-library-panels.sh"
 
   grafana:
     image: grafana/grafana:latest
