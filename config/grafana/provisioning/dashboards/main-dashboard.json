@@ -957,8 +957,8 @@
         "showHeader": true,
         "sortBy": [
           {
-            "desc": true,
-            "displayName": "gap_end"
+            "desc": false,
+            "displayName": "gap_start"
           }
         ]
       },
@@ -972,7 +972,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "WITH missing_slots AS (\n  SELECT slot\n  FROM slots\n  WHERE status = 'rooted'\n    AND (\n      bank_hash = '' \n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    )\n  ORDER BY slot\n),\nslot_ranges AS (\n  SELECT \n    slot,\n    slot - ROW_NUMBER() OVER (ORDER BY slot) as grp\n  FROM missing_slots\n),\ngaps AS (\n  SELECT \n    MIN(slot) as gap_start,\n    MAX(slot) as gap_end,\n    MAX(slot) - MIN(slot) + 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM slot_ranges\n  GROUP BY grp\n  ORDER BY MIN(slot) DESC\n  LIMIT 25\n)\nSELECT * FROM gaps",
+          "rawSql": "WITH missing_slots AS (\n  SELECT slot\n  FROM slots\n  WHERE status = 'rooted'\n    AND (\n      bank_hash = '' \n      OR cumulative_lthash = '\\x00'\n      OR length(cumulative_lthash) = 0\n    )\n  ORDER BY slot\n),\nslot_ranges AS (\n  SELECT \n    slot,\n    slot - ROW_NUMBER() OVER (ORDER BY slot) as grp\n  FROM missing_slots\n),\ngaps AS (\n  SELECT \n    MIN(slot) as gap_start,\n    MAX(slot) as gap_end,\n    MAX(slot) - MIN(slot) + 1 as gap_size,\n    'Missing bank hash or LtHash data' as reason\n  FROM slot_ranges\n  GROUP BY grp\n  ORDER BY MIN(slot) ASC\n  LIMIT 25\n)\nSELECT * FROM gaps",
           "refId": "A",
           "sql": {
             "columns": [
@@ -993,7 +993,7 @@
           }
         }
       ],
-      "title": "Recent Data Gaps (Last 25)",
+      "title": "Data Gaps (First 25, Earliest to Latest)",
       "type": "table"
     },
     {

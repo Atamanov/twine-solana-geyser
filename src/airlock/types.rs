@@ -1,5 +1,4 @@
 use crossbeam_queue::SegQueue;
-use dashmap::DashMap;
 use log::error;
 use serde::{Deserialize, Serialize};
 use solana_sdk::pubkey::Pubkey;
@@ -86,39 +85,7 @@ pub struct SlotAirlock {
     pub sealed_data: Option<Vec<OwnedReplicaAccountInfo>>,
 }
 
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicU32;
-
-#[derive(Debug)]
-pub struct AirlockSlotData {
-    /// Tracks how many validator threads are currently writing to this slot's buffer
-    pub writer_count: AtomicU32,
-    /// Per-thread buffers to eliminate contention - indexed by thread ID
-    /// Using a fixed-size array would be better but ThreadId is opaque
-    pub thread_buffers: DashMap<std::thread::ThreadId, Vec<OwnedAccountChange>>,
-    /// Tracks if a monitored account was seen in this slot
-    pub contains_monitored_change: AtomicBool,
-    /// Bank hash components (may arrive at any time)
-    pub bank_hash_components: parking_lot::RwLock<Option<BankHashComponentsInfo>>,
-    /// LtHash data (may arrive at any time)
-    pub delta_lthash: parking_lot::RwLock<Option<Vec<u8>>>,
-    pub cumulative_lthash: parking_lot::RwLock<Option<Vec<u8>>>,
-    /// Block metadata (may arrive at any time)
-    pub blockhash: parking_lot::RwLock<Option<String>>,
-    pub parent_slot: parking_lot::RwLock<Option<u64>>,
-    pub executed_transaction_count: parking_lot::RwLock<Option<u64>>,
-    pub entry_count: parking_lot::RwLock<Option<u64>>,
-    /// Slot status (processed, confirmed, rooted, etc)
-    pub status: parking_lot::RwLock<String>,
-    /// Timestamp when slot was created
-    pub created_at: std::time::Instant,
-    /// Vote transactions in this slot
-    pub vote_transactions: parking_lot::RwLock<Vec<VoteTransaction>>,
-    /// Estimated memory usage in bytes
-    pub memory_usage: AtomicUsize,
-    /// Slot number when this slot was marked as rooted (for grace period handling)
-    pub rooted_at_slot: parking_lot::RwLock<Option<u64>>,
-}
+// Removed old AirlockSlotData - now using OptimizedSlotData from optimized_types.rs
 
 impl SlotAirlock {
     pub fn new() -> Self {
@@ -130,59 +97,7 @@ impl SlotAirlock {
     }
 }
 
-impl AirlockSlotData {
-    pub fn new() -> Self {
-        Self {
-            writer_count: AtomicU32::new(0),
-            thread_buffers: DashMap::with_capacity(32), // Pre-size for typical thread count
-            contains_monitored_change: AtomicBool::new(false),
-            bank_hash_components: parking_lot::RwLock::new(None),
-            delta_lthash: parking_lot::RwLock::new(None),
-            cumulative_lthash: parking_lot::RwLock::new(None),
-            blockhash: parking_lot::RwLock::new(None),
-            parent_slot: parking_lot::RwLock::new(None),
-            executed_transaction_count: parking_lot::RwLock::new(None),
-            entry_count: parking_lot::RwLock::new(None),
-            status: parking_lot::RwLock::new("created".to_string()),
-            created_at: std::time::Instant::now(),
-            vote_transactions: parking_lot::RwLock::new(Vec::with_capacity(300)),
-            memory_usage: AtomicUsize::new(0),
-            rooted_at_slot: parking_lot::RwLock::new(None),
-        }
-    }
-
-    /// Check if we have all required data for database write
-    pub fn has_complete_data(&self) -> bool {
-        // Quick check using atomics to avoid locks
-        // We only do the expensive lock-based check if likely to succeed
-        if !self.is_rooted() {
-            return false;
-        }
-        
-        // Do all checks at once to minimize lock acquisition
-        let has_bank_hash = self.bank_hash_components.read().is_some();
-        if !has_bank_hash {
-            return false;
-        }
-        
-        let has_lthash = self.delta_lthash.read().is_some();
-        if !has_lthash {
-            return false;
-        }
-        
-        let has_blockhash = self.blockhash.read().is_some();
-        has_blockhash && 
-        self.cumulative_lthash.read().is_some() &&
-        self.parent_slot.read().is_some() &&
-        self.executed_transaction_count.read().is_some() &&
-        self.entry_count.read().is_some()
-    }
-
-    /// Check if slot is rooted
-    pub fn is_rooted(&self) -> bool {
-        *self.status.read() == "rooted"
-    }
-}
+// AirlockSlotData impl removed - now using OptimizedSlotData
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -214,36 +129,33 @@ impl std::str::FromStr for NetworkMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiServerConfig {
+    pub bind_address: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsServerConfig {
+    pub bind_address: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
     pub monitored_accounts: Vec<String>,
-    pub max_slots_tracked: usize,
-    pub enable_lthash_notifications: bool,
-
+    
     // Database configuration
-    pub db_host: String,
-    pub db_port: u16,
-    pub db_user: String,
-    pub db_password: String,
-    pub db_name: String,
-
+    pub connection_string: String,
+    
     // Worker pool configuration
-    pub num_worker_threads: usize,
-    pub db_connections_per_worker: usize,
+    pub worker_pool_size: usize,
     pub max_queue_size: usize,
     pub batch_size: usize,
-    pub batch_timeout_ms: u64,
 
     // API server configuration
-    pub api_port: Option<u16>,
+    pub api_server: Option<ApiServerConfig>,
 
-    // Proof scheduling
-    pub proof_scheduling_slot_interval: u64,
-
-    // Metrics
-    pub metrics_port: u16,
-
-    // Network mode
-    pub network_mode: NetworkMode,
+    // Metrics server configuration  
+    pub metrics_server: Option<MetricsServerConfig>,
 
     // Logging configuration
     #[serde(default = "default_log_file")]
@@ -264,22 +176,12 @@ impl Default for PluginConfig {
     fn default() -> Self {
         Self {
             monitored_accounts: Vec::new(),
-            max_slots_tracked: 100,
-            enable_lthash_notifications: true,
-            db_host: "localhost".to_string(),
-            db_port: 5432,
-            db_user: "geyser_writer".to_string(),
-            db_password: "geyser_writer_password".to_string(),
-            db_name: "twine_solana_db".to_string(),
-            num_worker_threads: 4,
-            db_connections_per_worker: 2,
+            connection_string: "postgresql://geyser_writer:geyser_writer_password@localhost:5432/twine_solana_db".to_string(),
+            worker_pool_size: 4,
             max_queue_size: 10000,
             batch_size: 1000,
-            batch_timeout_ms: 100,
-            api_port: None,
-            proof_scheduling_slot_interval: 10,
-            metrics_port: 9091,
-            network_mode: NetworkMode::Mainnet,
+            api_server: None,
+            metrics_server: None,
             log_file: default_log_file(),
             log_level: default_log_level(),
         }
@@ -297,9 +199,6 @@ pub enum DbWriteCommand {
         last_blockhash: String,
         delta_lthash: Vec<u8>,
         cumulative_lthash: Vec<u8>,
-        accounts_delta_hash: Option<String>,
-        accounts_lthash_checksum: Option<String>,
-        epoch_accounts_hash: Option<String>,
         // Block metadata fields
         blockhash: Option<String>,
         parent_slot: Option<u64>,
@@ -314,9 +213,11 @@ pub enum DbWriteCommand {
     },
     AccountChanges {
         slot: u64,
-        changes: Vec<OwnedAccountChange>,
+        changes: Vec<crate::airlock::optimized_types::InternalAccountChange>,
     },
     ProofRequests {
+        // NOTE: Proof requests are no longer processed by the geyser plugin
+        // This variant is kept for backwards compatibility only
         requests: Vec<ProofRequest>,
     },
     EpochStakes {
@@ -368,6 +269,7 @@ pub struct ValidatorStake {
     pub total_epoch_stake: u64,
 }
 
+/// DEPRECATED: Proof requests are no longer processed by the geyser plugin
 #[derive(Debug)]
 pub struct ProofRequest {
     pub slot: u64,

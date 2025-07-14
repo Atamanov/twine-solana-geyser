@@ -1,23 +1,12 @@
 pub mod pool;
 pub mod types;
+pub mod optimized_types;
 
-use crate::airlock::types::{OwnedReplicaAccountInfo, Slot, SlotAirlock};
-use dashmap::DashMap;
-use dashmap::DashSet;
-use parking_lot::Mutex;
-use solana_sdk::pubkey::Pubkey;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
-#[derive(Debug)]
-pub struct AirlockManager {
-    slot_airlocks: Arc<DashMap<Slot, Arc<Mutex<SlotAirlock>>>>,
-    monitored_accounts: Arc<DashSet<Pubkey>>,
-    stats: Arc<AirlockStats>,
-}
 
 #[derive(Debug)]
 pub struct AirlockStats {
+    // Account and slot tracking
     pub total_updates: AtomicUsize,
     pub sealed_slots: AtomicUsize,
     pub active_slots: AtomicUsize,
@@ -29,7 +18,7 @@ pub struct AirlockStats {
     pub queue_capacity: AtomicUsize,
     pub worker_pool_size: AtomicUsize,
     pub queue_throughput: AtomicUsize,
-    // New DB metrics
+    // DB metrics
     pub db_batch_success_count: AtomicUsize,
     pub db_batch_error_count: AtomicUsize,
     pub last_db_batch_slot: AtomicUsize,
@@ -53,6 +42,13 @@ pub struct AirlockStats {
     pub slots_deleted_total: AtomicUsize,
     pub stakes_saved_total: AtomicUsize,
     pub vote_buffer_memory_bytes: AtomicUsize,
+    // New fields for optimized implementation
+    pub slots_created: AtomicUsize,
+    pub slots_flushed: AtomicUsize,
+    pub slots_cleaned: AtomicUsize,
+    pub db_writes_queued: AtomicUsize,
+    pub db_writes_dropped: AtomicUsize,
+    pub memory_pressure_events: AtomicUsize,
 }
 
 impl Default for AirlockStats {
@@ -69,149 +65,31 @@ impl Default for AirlockStats {
             queue_capacity: AtomicUsize::new(0),
             worker_pool_size: AtomicUsize::new(0),
             queue_throughput: AtomicUsize::new(0),
-            // New DB metrics
             db_batch_success_count: AtomicUsize::new(0),
             db_batch_error_count: AtomicUsize::new(0),
             last_db_batch_slot: AtomicUsize::new(0),
             last_db_batch_timestamp: AtomicUsize::new(0),
-            // Geyser plugin internal metrics
             airlock_pending_slots: AtomicUsize::new(0),
             airlock_missing_data_slots: AtomicUsize::new(0),
             slot_status_updates: AtomicUsize::new(0),
             block_metadata_received: AtomicUsize::new(0),
-            // Memory tracking
             total_memory_usage: AtomicUsize::new(0),
             peak_memory_usage: AtomicUsize::new(0),
             slots_in_memory: AtomicUsize::new(0),
-            // Vote tracking
             vote_transactions_total: AtomicUsize::new(0),
             tower_sync_count: AtomicUsize::new(0),
             compact_vote_count: AtomicUsize::new(0),
             vote_switch_count: AtomicUsize::new(0),
             other_vote_count: AtomicUsize::new(0),
-            // Memory management
             slots_deleted_total: AtomicUsize::new(0),
             stakes_saved_total: AtomicUsize::new(0),
             vote_buffer_memory_bytes: AtomicUsize::new(0),
-        }
-    }
-}
-
-impl AirlockManager {
-    pub fn new(monitored_accounts: Vec<Pubkey>) -> Self {
-        let accounts_set = Arc::new(DashSet::new());
-        for account in monitored_accounts {
-            accounts_set.insert(account);
-        }
-
-        Self {
-            slot_airlocks: Arc::new(DashMap::new()),
-            monitored_accounts: accounts_set,
-            stats: Arc::new(AirlockStats::default()),
-        }
-    }
-
-    pub fn is_account_monitored(&self, pubkey: &Pubkey) -> bool {
-        self.monitored_accounts.is_empty() || self.monitored_accounts.contains(pubkey)
-    }
-
-    pub fn add_account_update(
-        &self,
-        slot: Slot,
-        account_info: OwnedReplicaAccountInfo,
-    ) -> Result<(), String> {
-        let airlock_mutex = self
-            .slot_airlocks
-            .entry(slot)
-            .or_insert_with(|| {
-                self.stats.active_slots.fetch_add(1, Ordering::Relaxed);
-                Arc::new(Mutex::new(SlotAirlock::new()))
-            })
-            .clone();
-
-        {
-            let airlock = airlock_mutex.lock();
-            airlock.active_writers.fetch_add(1, Ordering::SeqCst);
-        }
-
-        {
-            let airlock = airlock_mutex.lock();
-            airlock.queue.push(account_info);
-        }
-
-        {
-            let airlock = airlock_mutex.lock();
-            airlock.active_writers.fetch_sub(1, Ordering::SeqCst);
-        }
-
-        self.stats.total_updates.fetch_add(1, Ordering::Relaxed);
-        Ok(())
-    }
-
-    pub fn seal_slot(&self, slot: Slot) -> Option<Vec<OwnedReplicaAccountInfo>> {
-        if let Some((_, airlock_mutex)) = self.slot_airlocks.remove(&slot) {
-            let mut airlock = airlock_mutex.lock();
-
-            while airlock.active_writers.load(Ordering::SeqCst) != 0 {
-                std::thread::yield_now();
-            }
-
-            let mut updates = Vec::new();
-            while let Some(update) = airlock.queue.pop() {
-                updates.push(update);
-            }
-
-            airlock.sealed_data = Some(updates.clone());
-
-            self.stats.sealed_slots.fetch_add(1, Ordering::Relaxed);
-            self.stats.active_slots.fetch_sub(1, Ordering::Relaxed);
-
-            if !updates.is_empty() {
-                log::info!(
-                    "Sealed slot {} with {} account updates",
-                    slot,
-                    updates.len()
-                );
-            }
-
-            Some(updates)
-        } else {
-            None
-        }
-    }
-
-    pub fn get_stats(&self) -> AirlockStatsSnapshot {
-        let mut snapshot = self.stats.snapshot();
-        snapshot.monitored_accounts = self.monitored_accounts.len();
-        snapshot
-    }
-
-    pub fn add_monitored_account(&self, pubkey: Pubkey) {
-        self.monitored_accounts.insert(pubkey);
-    }
-
-    pub fn remove_monitored_account(&self, pubkey: &Pubkey) -> bool {
-        self.monitored_accounts.remove(pubkey).is_some()
-    }
-
-    pub fn clear_old_slots(&self, current_slot: Slot, keep_slots: u64) {
-        let min_slot = current_slot.saturating_sub(keep_slots);
-        let mut removed = 0;
-
-        self.slot_airlocks.retain(|&slot, _| {
-            if slot < min_slot {
-                removed += 1;
-                false
-            } else {
-                true
-            }
-        });
-
-        if removed > 0 {
-            log::debug!("Cleared {} old slots before slot {}", removed, min_slot);
-            self.stats
-                .active_slots
-                .fetch_sub(removed, Ordering::Relaxed);
+            slots_created: AtomicUsize::new(0),
+            slots_flushed: AtomicUsize::new(0),
+            slots_cleaned: AtomicUsize::new(0),
+            db_writes_queued: AtomicUsize::new(0),
+            db_writes_dropped: AtomicUsize::new(0),
+            memory_pressure_events: AtomicUsize::new(0),
         }
     }
 }
@@ -244,16 +122,20 @@ impl AirlockStats {
             total_memory_usage: self.total_memory_usage.load(Ordering::Relaxed),
             peak_memory_usage: self.peak_memory_usage.load(Ordering::Relaxed),
             slots_in_memory: self.slots_in_memory.load(Ordering::Relaxed),
-            // Vote tracking
             vote_transactions_total: self.vote_transactions_total.load(Ordering::Relaxed),
             tower_sync_count: self.tower_sync_count.load(Ordering::Relaxed),
             compact_vote_count: self.compact_vote_count.load(Ordering::Relaxed),
             vote_switch_count: self.vote_switch_count.load(Ordering::Relaxed),
             other_vote_count: self.other_vote_count.load(Ordering::Relaxed),
-            // Memory management
             slots_deleted_total: self.slots_deleted_total.load(Ordering::Relaxed),
             stakes_saved_total: self.stakes_saved_total.load(Ordering::Relaxed),
             vote_buffer_memory_bytes: self.vote_buffer_memory_bytes.load(Ordering::Relaxed),
+            slots_created: self.slots_created.load(Ordering::Relaxed),
+            slots_flushed: self.slots_flushed.load(Ordering::Relaxed),
+            slots_cleaned: self.slots_cleaned.load(Ordering::Relaxed),
+            db_writes_queued: self.db_writes_queued.load(Ordering::Relaxed),
+            db_writes_dropped: self.db_writes_dropped.load(Ordering::Relaxed),
+            memory_pressure_events: self.memory_pressure_events.load(Ordering::Relaxed),
         }
     }
 }
@@ -283,14 +165,19 @@ pub struct AirlockStatsSnapshot {
     pub total_memory_usage: usize,
     pub peak_memory_usage: usize,
     pub slots_in_memory: usize,
-    // Vote tracking
     pub vote_transactions_total: usize,
     pub tower_sync_count: usize,
     pub compact_vote_count: usize,
     pub vote_switch_count: usize,
     pub other_vote_count: usize,
-    // Memory management
     pub slots_deleted_total: usize,
     pub stakes_saved_total: usize,
     pub vote_buffer_memory_bytes: usize,
+    // New fields
+    pub slots_created: usize,
+    pub slots_flushed: usize,
+    pub slots_cleaned: usize,
+    pub db_writes_queued: usize,
+    pub db_writes_dropped: usize,
+    pub memory_pressure_events: usize,
 }
