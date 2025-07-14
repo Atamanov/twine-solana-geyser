@@ -49,9 +49,8 @@ done
 
 echo "Library panel creation process finished."
 
-# Reload dashboard provisioning to make sure dashboards pick up new panels
-echo "Reloading dashboard provisioning..."
-curl -X POST http://admin:admin@grafana:3000/api/admin/provisioning/dashboards/reload
-echo
+# Copy the dashboard provider config into place to trigger provisioning
+echo "Triggering dashboard provisioning..."
+cp /etc/grafana/provisioning/dashboards/dashboards.yml.template /etc/grafana/provisioning/dashboards/dashboards.yml
 
 echo "Importer finished." 

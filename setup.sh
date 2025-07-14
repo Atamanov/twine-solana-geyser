@@ -86,7 +86,7 @@ start_all() {
     fi
     
     print_info "Starting all services..."
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d --remove-orphans
+    docker compose up -d --remove-orphans
     
     if [ $? -ne 0 ]; then
         print_error "Failed to start services"
@@ -130,7 +130,7 @@ start_all() {
     
     # Check if services are healthy
     print_info "Checking service health..."
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps
+    docker compose ps
     
     echo ""
     print_info "Services are running! Access them at:"
@@ -146,7 +146,7 @@ start_all() {
 # Stop all services
 stop_all() {
     print_info "Stopping all services..."
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
+    docker compose down
     print_info "All services stopped"
 }
 
@@ -158,7 +158,7 @@ clean_all() {
     
     if [[ "$response" =~ ^[Yy]$ ]]; then
         print_info "Cleaning up..."
-        docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down -v
+        docker compose down -v
         docker volume rm twine-solana-geyser_timescale_data 2>/dev/null || true
         docker volume rm twine-solana-geyser-timescale-data 2>/dev/null || true
         docker network rm twine-network 2>/dev/null || true
@@ -175,16 +175,19 @@ show_logs() {
             docker compose logs -f timescaledb
             ;;
         prometheus)
-            docker compose -f docker-compose.monitoring.yml logs -f prometheus
+            docker compose logs -f prometheus
             ;;
         grafana)
-            docker compose -f docker-compose.monitoring.yml logs -f grafana
+            docker compose logs -f grafana
+            ;;
+        importer)
+            docker compose logs -f grafana-importer
             ;;
         pgadmin)
-            docker compose -f docker-compose.monitoring.yml logs -f pgadmin
+            docker compose logs -f pgadmin
             ;;
         *)
-            print_error "Unknown service: $1. Use 'db', 'prometheus', 'grafana', or 'pgadmin'."
+            print_error "Unknown service: $1. Use 'db', 'prometheus', 'grafana', 'importer', or 'pgadmin'."
             ;;
     esac
 }
@@ -192,7 +195,7 @@ show_logs() {
 # Show all logs
 show_all_logs() {
     print_info "Showing logs for all services..."
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml logs -f
+    docker compose logs -f
 }
 
 # Build the plugin
@@ -214,7 +217,7 @@ build_plugin() {
 show_status() {
     print_info "Service Status:"
     echo ""
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml ps
+    docker compose ps
     
     # Check if plugin is built
     if [ -f "target/release/libtwine_solana_geyser.so" ]; then
@@ -263,18 +266,18 @@ init_database() {
 
 # Initialize/restart Grafana to reload dashboards
 init_grafana() {
-    print_info "Checking if Grafana container is running..."
+    print_info "Checking if Grafana containers are running..."
     
-    if ! docker ps | grep -q twine-grafana; then
-        print_error "Grafana container is not running. Please run './setup.sh start' first."
+    if ! docker ps | grep -q twine-grafana || ! docker ps | grep -q twine-grafana-importer; then
+        print_error "Grafana containers are not running. Please run './setup.sh start' first."
         exit 1
     fi
     
-    print_info "Restarting Grafana to reload dashboard configuration..."
-    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml restart grafana
+    print_info "Restarting Grafana and Importer to reload configuration..."
+    docker compose restart grafana grafana-importer
     
     if [ $? -eq 0 ]; then
-        print_info "Grafana restarted successfully!"
+        print_info "Grafana and Importer restarted successfully!"
         
         # Wait for Grafana to be ready
         print_info "Waiting for Grafana to be ready..."
@@ -292,7 +295,6 @@ init_grafana() {
         echo ""
         print_info "Grafana has been restarted with the latest dashboard configuration."
         print_info "Access Grafana at: http://localhost:3000 (username: admin, password: admin)"
-        print_info "The dashboard should now include the Vote Participation & Stake Coverage section."
         
         # Refresh materialized view if database is running
         if docker ps | grep -q twine-timescaledb; then
@@ -300,7 +302,7 @@ init_grafana() {
             docker exec twine-timescaledb psql -U geyser_writer -d twine_solana_db -c "SELECT refresh_vote_participation_stats();" 2>/dev/null || true
         fi
     else
-        print_error "Failed to restart Grafana"
+        print_error "Failed to restart Grafana and Importer"
         exit 1
     fi
 }
@@ -320,7 +322,7 @@ case "$1" in
         ;;
     logs)
         if [ -z "$2" ]; then
-            print_error "Please specify a service: db, prometheus, grafana, or pgadmin"
+            print_error "Please specify a service: db, prometheus, grafana, importer, or pgadmin"
             exit 1
         fi
         show_logs "$2"
