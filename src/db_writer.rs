@@ -71,8 +71,10 @@ impl DbWriter {
     async fn process_command(&self, cmd: DbCommand) {
         match cmd {
             DbCommand::WriteSlot(slot_data) => {
+                log::info!("DB writer processing slot {}", slot_data.slot);
                 match self.write_slot(slot_data).await {
                     Ok(_) => {
+                        log::info!("Successfully wrote slot to database");
                         // Increment success counter
                         crate::metrics::increment_write_success("slot");
                     }

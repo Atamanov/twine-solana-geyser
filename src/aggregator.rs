@@ -31,12 +31,17 @@ impl Aggregator {
             
             // Try to get a ready slot
             if let Some(slot) = self.airlock.try_get_ready_slot() {
+                log::info!("Aggregator processing ready slot {}", slot);
                 // Aggregate the slot data
                 if let Some(aggregated) = self.airlock.aggregate_slot_data(slot) {
+                    log::info!("Aggregated slot {} with {} account changes and {} vote transactions", 
+                               slot, aggregated.account_changes.len(), aggregated.vote_transactions.len());
                     // Convert and send to DB writer
                     if let Err(e) = self.process_aggregated_slot(aggregated) {
                         log::error!("Failed to process aggregated slot {}: {:?}", slot, e);
                     }
+                } else {
+                    log::warn!("Failed to aggregate data for slot {}", slot);
                 }
             } else {
                 // No ready slots, sleep briefly to avoid busy waiting
