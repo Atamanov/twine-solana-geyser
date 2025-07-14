@@ -1044,7 +1044,7 @@ impl TwineGeyserPlugin {
                 .fetch_add(1, Ordering::Relaxed);
             
             warn!(
-                "Slot {} rooted but INCOMPLETE - bank_hash: {}, delta_lthash: {}, cumulative_lthash: {}, blockhash: {}, parent_slot: {}, executed_transaction_count: {}, entry_count: {}, keeping in airlock",
+                "Slot {} rooted but INCOMPLETE - bank_hash: {}, delta_lthash: {}, cumulative_lthash: {}, blockhash: {}, parent_slot: {}, executed_transaction_count: {}, entry_count: {}, keeping in airlock. This may be due to a recent plugin restart.",
                 slot, 
                 bank_hash_details,
                 if has_delta { "present" } else { "MISSING" },
