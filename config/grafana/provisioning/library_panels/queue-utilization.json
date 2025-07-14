@@ -1,108 +1,114 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Queue Utilization",
   "uid": "queue-utilization",
-  "title": "Queue Utilization",
-  "description": "Real-time queue depth and utilization across components",
-  "type": "timeseries",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "legend": {
-      "calcs": ["mean", "max"],
-      "displayMode": "table",
-      "placement": "bottom",
-      "showLegend": true,
-      "sortBy": "Mean",
-      "sortDesc": true
+  "model": {
+    "title": "Queue Utilization",
+    "description": "Real-time queue depth and utilization across components",
+    "type": "timeseries",
+    "options": {
+      "legend": {
+        "calcs": [
+          "mean",
+          "max"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true,
+        "sortBy": "Mean",
+        "sortDesc": true
+      },
+      "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+      }
     },
-    "tooltip": {
-      "mode": "multi",
-      "sort": "desc"
+    "targets": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_ready_queue_len",
+        "legendFormat": "Ready Queue",
+        "range": true,
+        "refId": "A"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_active_slots",
+        "legendFormat": "Active Slots",
+        "range": true,
+        "refId": "B"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_buffered_account_changes",
+        "legendFormat": "Buffered Changes",
+        "range": true,
+        "refId": "C"
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "palette-classic"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "gradientMode": "none",
+          "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+          },
+          "insertNulls": false,
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "pointSize": 5,
+          "scaleDistribution": {
+            "type": "linear"
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "none"
+          },
+          "thresholdsStyle": {
+            "mode": "off"
+          }
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            }
+          ]
+        },
+        "unit": "none"
+      },
+      "overrides": []
     }
   },
-  "targets": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_ready_queue_len",
-      "legendFormat": "Ready Queue",
-      "range": true,
-      "refId": "A"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_active_slots",
-      "legendFormat": "Active Slots",
-      "range": true,
-      "refId": "B"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_buffered_account_changes",
-      "legendFormat": "Buffered Changes",
-      "range": true,
-      "refId": "C"
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "palette-classic"
-      },
-      "custom": {
-        "axisBorderShow": false,
-        "axisCenteredZero": false,
-        "axisColorMode": "text",
-        "axisLabel": "",
-        "axisPlacement": "auto",
-        "barAlignment": 0,
-        "drawStyle": "line",
-        "fillOpacity": 10,
-        "gradientMode": "none",
-        "hideFrom": {
-          "tooltip": false,
-          "viz": false,
-          "legend": false
-        },
-        "insertNulls": false,
-        "lineInterpolation": "smooth",
-        "lineWidth": 2,
-        "pointSize": 5,
-        "scaleDistribution": {
-          "type": "linear"
-        },
-        "showPoints": "never",
-        "spanNulls": false,
-        "stacking": {
-          "group": "A",
-          "mode": "none"
-        },
-        "thresholdsStyle": {
-          "mode": "off"
-        }
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "green",
-            "value": null
-          }
-        ]
-      },
-      "unit": "none"
-    },
-    "overrides": []
-  }
+  "version": 1
 }

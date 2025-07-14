@@ -1,88 +1,89 @@
 
 {
-    "name": "Airlock Performance",
-    "model": {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percent"
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        },
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "editorMode": "code",
-          "expr": "rate(geyser_cache_hits_total[5m]) / (rate(geyser_cache_hits_total[5m]) + rate(geyser_cache_misses_total[5m])) * 100",
-          "legendFormat": "Cache Hit Rate",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Airlock Cache Performance",
-      "type": "timeseries"
+  "folderUid": "twine-geyser",
+  "name": "Airlock Performance",
+  "uid": "airlock-performance",
+  "model": {
+    "datasource": {
+      "type": "prometheus",
+      "uid": "${prometheus}"
     },
-    "type": "graph",
-    "schemaVersion": 1
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "palette-classic"
+        },
+        "custom": {
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "gradientMode": "none",
+          "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+          },
+          "insertNulls": false,
+          "lineInterpolation": "linear",
+          "lineWidth": 1,
+          "pointSize": 5,
+          "scaleDistribution": {
+            "type": "linear"
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "none"
+          },
+          "thresholdsStyle": {
+            "mode": "off"
+          }
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            }
+          ]
+        },
+        "unit": "percent"
+      },
+      "overrides": []
+    },
+    "options": {
+      "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+      },
+      "legend": {
+        "displayMode": "list",
+        "placement": "bottom",
+        "showLegend": true
+      }
+    },
+    "targets": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "rate(geyser_cache_hits_total[5m]) / (rate(geyser_cache_hits_total[5m]) + rate(geyser_cache_misses_total[5m])) * 100",
+        "legendFormat": "Cache Hit Rate",
+        "range": true,
+        "refId": "A"
+      }
+    ],
+    "title": "Airlock Cache Performance",
+    "type": "timeseries"
+  },
+  "version": 1
 }

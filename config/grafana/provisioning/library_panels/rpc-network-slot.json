@@ -1,56 +1,61 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "RPC Network Slot",
   "uid": "rpc-network-slot",
-  "title": "RPC Network Slot",
-  "description": "Current RPC network slot (tip) from the Solana cluster",
-  "type": "stat",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "colorMode": "value",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "orientation": "auto",
-    "percentChangeColorMode": "standard",
-    "reduceOptions": {
-      "calcs": ["lastNotNull"],
-      "fields": "",
-      "values": false
+  "model": {
+    "description": "Current RPC network slot (tip) from the Solana cluster",
+    "type": "stat",
+    "options": {
+      "colorMode": "value",
+      "graphMode": "none",
+      "justifyMode": "center",
+      "orientation": "auto",
+      "percentChangeColorMode": "standard",
+      "reduceOptions": {
+        "calcs": [
+          "lastNotNull"
+        ],
+        "fields": "",
+        "values": false
+      },
+      "showPercentChange": false,
+      "textMode": "value_and_name",
+      "wideLayout": true
     },
-    "showPercentChange": false,
-    "textMode": "value_and_name",
-    "wideLayout": true
+    "targets": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_network_slot",
+        "legendFormat": "Network Tip",
+        "range": true,
+        "refId": "A"
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "blue",
+              "value": null
+            }
+          ]
+        },
+        "unit": "none",
+        "decimals": 0
+      },
+      "overrides": []
+    },
+    "title": "RPC Network Slot"
   },
-  "targets": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_network_slot",
-      "legendFormat": "Network Tip",
-      "range": true,
-      "refId": "A"
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "blue",
-            "value": null
-          }
-        ]
-      },
-      "unit": "none",
-      "decimals": 0
-    },
-    "overrides": []
-  }
+  "version": 1
 }

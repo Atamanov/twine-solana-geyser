@@ -402,6 +402,27 @@ impl MetricsCollector {
         self.buffer_allocations
             .with_label_values(&["slot"])
             .inc_by(metrics.buffer_allocations.load(Ordering::Relaxed));
+            
+        // Update global counters
+        self.slots_rooted
+            .with_label_values(&["validator"])
+            .inc_by(GLOBAL_COUNTERS.slots_rooted.load(Ordering::Relaxed));
+            
+        self.write_errors
+            .with_label_values(&["database"])
+            .inc_by(GLOBAL_COUNTERS.write_errors.load(Ordering::Relaxed));
+            
+        self.account_changes_written
+            .with_label_values(&["success"])
+            .inc_by(GLOBAL_COUNTERS.account_changes_written.load(Ordering::Relaxed));
+            
+        self.vote_transactions_written
+            .with_label_values(&["success"])
+            .inc_by(GLOBAL_COUNTERS.vote_transactions_written.load(Ordering::Relaxed));
+            
+        self.buffer_evictions
+            .with_label_values(&["age"])
+            .inc_by(GLOBAL_COUNTERS.buffer_evictions.load(Ordering::Relaxed));
         
         // Update gauges
         
@@ -663,74 +684,59 @@ pub fn update_validator_slot(slot: u64) {
     GLOBAL_METRICS.validator_slot.store(slot, Ordering::Relaxed);
 }
 
-// Lazy static for metric collectors that need to be accessed globally
+// Global atomic counters for metrics that need to be updated from various places
+pub struct GlobalCounters {
+    pub write_errors: AtomicU64,
+    pub write_success: AtomicU64,
+    pub account_changes_written: AtomicU64,
+    pub vote_transactions_written: AtomicU64,
+    pub slots_rooted: AtomicU64,
+    pub buffer_evictions: AtomicU64,
+}
+
+impl GlobalCounters {
+    fn new() -> Self {
+        Self {
+            write_errors: AtomicU64::new(0),
+            write_success: AtomicU64::new(0),
+            account_changes_written: AtomicU64::new(0),
+            vote_transactions_written: AtomicU64::new(0),
+            slots_rooted: AtomicU64::new(0),
+            buffer_evictions: AtomicU64::new(0),
+        }
+    }
+}
+
 lazy_static::lazy_static! {
-    static ref WRITE_ERRORS: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_write_errors_total",
-        "Total write errors by type",
-        &["operation", "error_type"]
-    ).unwrap();
-    
-    static ref WRITE_SUCCESS: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_write_success_total",
-        "Total successful writes by type",
-        &["operation"]
-    ).unwrap();
-    
-    static ref ACCOUNT_CHANGES_WRITTEN: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_account_changes_written",
-        "Total account changes written to DB",
-        &["status"]
-    ).unwrap();
-    
-    static ref VOTE_TRANSACTIONS_WRITTEN: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_vote_transactions_written",
-        "Total vote transactions written to DB",
-        &["status"]
-    ).unwrap();
-    
-    static ref SLOTS_ROOTED: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_slots_rooted",
-        "Total number of slots that reached rooted status",
-        &["type"]
-    ).unwrap();
+    pub static ref GLOBAL_COUNTERS: GlobalCounters = GlobalCounters::new();
 }
 
 /// Increment write error counter
-pub fn increment_write_error(operation: &str, error_type: &str) {
-    WRITE_ERRORS.with_label_values(&[operation, error_type]).inc();
+pub fn increment_write_error(_operation: &str, _error_type: &str) {
+    GLOBAL_COUNTERS.write_errors.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment write success counter
-pub fn increment_write_success(operation: &str) {
-    WRITE_SUCCESS.with_label_values(&[operation]).inc();
+pub fn increment_write_success(_operation: &str) {
+    GLOBAL_COUNTERS.write_success.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment account changes written counter
 pub fn increment_account_changes_written(count: u64) {
-    ACCOUNT_CHANGES_WRITTEN.with_label_values(&["success"]).inc_by(count);
+    GLOBAL_COUNTERS.account_changes_written.fetch_add(count, Ordering::Relaxed);
 }
 
 /// Increment vote transactions written counter
 pub fn increment_vote_transactions_written(count: u64) {
-    VOTE_TRANSACTIONS_WRITTEN.with_label_values(&["success"]).inc_by(count);
+    GLOBAL_COUNTERS.vote_transactions_written.fetch_add(count, Ordering::Relaxed);
 }
 
 /// Increment slots rooted counter
 pub fn increment_slots_rooted() {
-    SLOTS_ROOTED.with_label_values(&["finalized"]).inc();
-}
-
-// Lazy static for buffer eviction tracking
-lazy_static::lazy_static! {
-    static ref BUFFER_EVICTIONS: IntCounterVec = register_int_counter_vec!(
-        "twine_geyser_buffer_evictions_total",
-        "Total number of buffer evictions",
-        &["reason"]
-    ).unwrap();
+    GLOBAL_COUNTERS.slots_rooted.fetch_add(1, Ordering::Relaxed);
 }
 
 /// Increment buffer evictions counter
-pub fn increment_buffer_evictions(reason: &str, count: u64) {
-    BUFFER_EVICTIONS.with_label_values(&[reason]).inc_by(count);
+pub fn increment_buffer_evictions(_reason: &str, count: u64) {
+    GLOBAL_COUNTERS.buffer_evictions.fetch_add(count, Ordering::Relaxed);
 }

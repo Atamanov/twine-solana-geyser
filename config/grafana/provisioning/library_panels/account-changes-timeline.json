@@ -1,138 +1,144 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Account Changes Timeline",
   "uid": "account-changes-timeline",
-  "title": "Account Changes Timeline",
-  "description": "Time series of account state changes by type",
-  "type": "timeseries",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "legend": {
-      "calcs": ["sum", "mean"],
-      "displayMode": "table",
-      "placement": "bottom",
-      "showLegend": true
+  "model": {
+    "title": "Account Changes Timeline",
+    "description": "Time series of account state changes by type",
+    "type": "timeseries",
+    "options": {
+      "legend": {
+        "calcs": [
+          "sum",
+          "mean"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true
+      },
+      "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+      }
     },
-    "tooltip": {
-      "mode": "multi",
-      "sort": "desc"
+    "targets": [
+      {
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
+        },
+        "editorMode": "code",
+        "format": "time_series",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  time_bucket('1 minute', created_at) AS time,\n  COUNT(*) FILTER (WHERE old_lamports = 0 AND new_lamports > 0) AS \"Created\",\n  COUNT(*) FILTER (WHERE old_lamports > 0 AND new_lamports > 0) AS \"Updated\",\n  COUNT(*) FILTER (WHERE old_lamports > 0 AND new_lamports = 0) AS \"Closed\"\nFROM account_changes\nWHERE created_at >= NOW() - INTERVAL '1 hour'\nGROUP BY time\nORDER BY time",
+        "refId": "A",
+        "sql": {
+          "columns": [
+            {
+              "parameters": [],
+              "type": "function"
+            }
+          ],
+          "groupBy": [
+            {
+              "property": {
+                "type": "string"
+              },
+              "type": "groupBy"
+            }
+          ],
+          "limit": 50
+        }
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "palette-classic"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "Changes",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 20,
+          "gradientMode": "none",
+          "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+          },
+          "insertNulls": false,
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "pointSize": 5,
+          "scaleDistribution": {
+            "type": "linear"
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "normal"
+          },
+          "thresholdsStyle": {
+            "mode": "off"
+          }
+        },
+        "mappings": [],
+        "unit": "none"
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Created"
+          },
+          "properties": [
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "green"
+              }
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Updated"
+          },
+          "properties": [
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Closed"
+          },
+          "properties": [
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "red"
+              }
+            }
+          ]
+        }
+      ]
     }
   },
-  "targets": [
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "time_series",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  time_bucket('1 minute', created_at) AS time,\n  COUNT(*) FILTER (WHERE old_lamports = 0 AND new_lamports > 0) AS \"Created\",\n  COUNT(*) FILTER (WHERE old_lamports > 0 AND new_lamports > 0) AS \"Updated\",\n  COUNT(*) FILTER (WHERE old_lamports > 0 AND new_lamports = 0) AS \"Closed\"\nFROM account_changes\nWHERE created_at >= NOW() - INTERVAL '1 hour'\nGROUP BY time\nORDER BY time",
-      "refId": "A",
-      "sql": {
-        "columns": [
-          {
-            "parameters": [],
-            "type": "function"
-          }
-        ],
-        "groupBy": [
-          {
-            "property": {
-              "type": "string"
-            },
-            "type": "groupBy"
-          }
-        ],
-        "limit": 50
-      }
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "palette-classic"
-      },
-      "custom": {
-        "axisBorderShow": false,
-        "axisCenteredZero": false,
-        "axisColorMode": "text",
-        "axisLabel": "Changes",
-        "axisPlacement": "auto",
-        "barAlignment": 0,
-        "drawStyle": "line",
-        "fillOpacity": 20,
-        "gradientMode": "none",
-        "hideFrom": {
-          "tooltip": false,
-          "viz": false,
-          "legend": false
-        },
-        "insertNulls": false,
-        "lineInterpolation": "smooth",
-        "lineWidth": 2,
-        "pointSize": 5,
-        "scaleDistribution": {
-          "type": "linear"
-        },
-        "showPoints": "never",
-        "spanNulls": false,
-        "stacking": {
-          "group": "A",
-          "mode": "normal"
-        },
-        "thresholdsStyle": {
-          "mode": "off"
-        }
-      },
-      "mappings": [],
-      "unit": "none"
-    },
-    "overrides": [
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Created"
-        },
-        "properties": [
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "green"
-            }
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Updated"
-        },
-        "properties": [
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "blue"
-            }
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Closed"
-        },
-        "properties": [
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "red"
-            }
-          }
-        ]
-      }
-    ]
-  }
+  "version": 1
 }

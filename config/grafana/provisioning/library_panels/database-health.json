@@ -1,125 +1,130 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Database Health Overview",
   "uid": "database-health",
-  "title": "Database Health Overview",
-  "description": "Key database metrics and connection status",
-  "type": "stat",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "colorMode": "background",
-    "graphMode": "none",
-    "justifyMode": "center",
-    "orientation": "horizontal",
-    "percentChangeColorMode": "standard",
-    "reduceOptions": {
-      "calcs": ["lastNotNull"],
-      "fields": "",
-      "values": false
+  "model": {
+    "title": "Database Health Overview",
+    "description": "Key database metrics and connection status",
+    "type": "stat",
+    "options": {
+      "colorMode": "background",
+      "graphMode": "none",
+      "justifyMode": "center",
+      "orientation": "horizontal",
+      "percentChangeColorMode": "standard",
+      "reduceOptions": {
+        "calcs": [
+          "lastNotNull"
+        ],
+        "fields": "",
+        "values": false
+      },
+      "showPercentChange": false,
+      "textMode": "value_and_name",
+      "wideLayout": true
     },
-    "showPercentChange": false,
-    "textMode": "value_and_name",
-    "wideLayout": true
-  },
-  "targets": [
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "table",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  pg_size_pretty(pg_database_size(current_database())) AS \"DB Size\"",
-      "refId": "A"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "table",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  COUNT(*) AS \"Active Connections\"\nFROM pg_stat_activity\nWHERE state = 'active'",
-      "refId": "B"
-    },
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "table",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  COUNT(*) AS \"Hypertables\"\nFROM timescaledb_information.hypertables",
-      "refId": "C"
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "green",
-            "value": null
-          }
-        ]
-      },
-      "unit": "none"
-    },
-    "overrides": [
+    "targets": [
       {
-        "matcher": {
-          "id": "byName",
-          "options": "DB Size"
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
         },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "bytes"
-          },
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "blue"
-            }
-          }
-        ]
+        "editorMode": "code",
+        "format": "table",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  pg_size_pretty(pg_database_size(current_database())) AS \"DB Size\"",
+        "refId": "A"
       },
       {
-        "matcher": {
-          "id": "byName",
-          "options": "Active Connections"
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
         },
-        "properties": [
-          {
-            "id": "thresholds",
-            "value": {
-              "mode": "absolute",
-              "steps": [
-                {
-                  "color": "green",
-                  "value": null
-                },
-                {
-                  "color": "yellow",
-                  "value": 50
-                },
-                {
-                  "color": "red",
-                  "value": 80
-                }
-              ]
-            }
-          }
-        ]
+        "editorMode": "code",
+        "format": "table",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  COUNT(*) AS \"Active Connections\"\nFROM pg_stat_activity\nWHERE state = 'active'",
+        "refId": "B"
+      },
+      {
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
+        },
+        "editorMode": "code",
+        "format": "table",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  COUNT(*) AS \"Hypertables\"\nFROM timescaledb_information.hypertables",
+        "refId": "C"
       }
-    ]
-  }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            }
+          ]
+        },
+        "unit": "none"
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "DB Size"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "bytes"
+            },
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Active Connections"
+          },
+          "properties": [
+            {
+              "id": "thresholds",
+              "value": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 50
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "version": 1
 }

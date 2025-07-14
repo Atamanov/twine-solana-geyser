@@ -1,157 +1,160 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Live Vote Stream",
   "uid": "live-vote-stream",
-  "title": "Live Vote Stream",
-  "description": "Real-time stream of validator votes with stake information",
-  "type": "table",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "showHeader": true,
-    "sortBy": [
+  "model": {
+    "title": "Live Vote Stream",
+    "description": "Real-time stream of validator votes with stake information",
+    "type": "table",
+    "options": {
+      "showHeader": true,
+      "sortBy": [
+        {
+          "desc": true,
+          "displayName": "Time"
+        }
+      ],
+      "cellHeight": "sm",
+      "frameIndex": 0,
+      "showTypeIcons": false
+    },
+    "targets": [
       {
-        "desc": true,
-        "displayName": "Time"
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
+        },
+        "editorMode": "code",
+        "format": "table",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  vote_timestamp AS \"Time\",\n  validator_name AS \"Validator\",\n  vote_type AS \"Type\",\n  vote_slot AS \"Vote Slot\",\n  root_slot AS \"Root\",\n  ROUND(validator_stake::numeric / 1e9, 2) AS \"Stake (SOL)\",\n  ROUND(stake_percentage::numeric, 2) AS \"Stake %\"\nFROM recent_votes_with_stakes\nORDER BY vote_timestamp DESC\nLIMIT 50",
+        "refId": "A",
+        "sql": {
+          "columns": [
+            {
+              "parameters": [],
+              "type": "function"
+            }
+          ],
+          "groupBy": [
+            {
+              "property": {
+                "type": "string"
+              },
+              "type": "groupBy"
+            }
+          ],
+          "limit": 50
+        }
       }
     ],
-    "cellHeight": "sm",
-    "frameIndex": 0,
-    "showTypeIcons": false
-  },
-  "targets": [
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "table",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  vote_timestamp AS \"Time\",\n  validator_name AS \"Validator\",\n  vote_type AS \"Type\",\n  vote_slot AS \"Vote Slot\",\n  root_slot AS \"Root\",\n  ROUND(validator_stake::numeric / 1e9, 2) AS \"Stake (SOL)\",\n  ROUND(stake_percentage::numeric, 2) AS \"Stake %\"\nFROM recent_votes_with_stakes\nORDER BY vote_timestamp DESC\nLIMIT 50",
-      "refId": "A",
-      "sql": {
-        "columns": [
-          {
-            "parameters": [],
-            "type": "function"
-          }
-        ],
-        "groupBy": [
-          {
-            "property": {
-              "type": "string"
-            },
-            "type": "groupBy"
-          }
-        ],
-        "limit": 50
-      }
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "text",
-            "value": null
-          }
-        ]
-      },
-      "custom": {
-        "align": "auto",
-        "cellOptions": {
-          "type": "auto"
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
         },
-        "inspect": false,
-        "filterable": true
-      }
-    },
-    "overrides": [
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Type"
-        },
-        "properties": [
-          {
-            "id": "custom.cellOptions",
-            "value": {
-              "type": "color-background"
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "text",
+              "value": null
             }
+          ]
+        },
+        "custom": {
+          "align": "auto",
+          "cellOptions": {
+            "type": "auto"
           },
-          {
-            "id": "mappings",
-            "value": [
-              {
-                "type": "value",
-                "options": {
-                  "vote": {
-                    "text": "Vote",
-                    "color": "dark-green"
-                  },
-                  "tower_sync": {
-                    "text": "Tower Sync",
-                    "color": "dark-blue"
-                  },
-                  "tower_sync_switch": {
-                    "text": "Tower Switch",
-                    "color": "dark-purple"
-                  },
-                  "compact_vote_state_update": {
-                    "text": "Compact",
-                    "color": "dark-orange"
+          "inspect": false,
+          "filterable": true
+        }
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Type"
+          },
+          "properties": [
+            {
+              "id": "custom.cellOptions",
+              "value": {
+                "type": "color-background"
+              }
+            },
+            {
+              "id": "mappings",
+              "value": [
+                {
+                  "type": "value",
+                  "options": {
+                    "vote": {
+                      "text": "Vote",
+                      "color": "dark-green"
+                    },
+                    "tower_sync": {
+                      "text": "Tower Sync",
+                      "color": "dark-blue"
+                    },
+                    "tower_sync_switch": {
+                      "text": "Tower Switch",
+                      "color": "dark-purple"
+                    },
+                    "compact_vote_state_update": {
+                      "text": "Compact",
+                      "color": "dark-orange"
+                    }
                   }
                 }
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Time"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "dateTimeAsLocal"
+            },
+            {
+              "id": "custom.width",
+              "value": 180
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Stake %"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "percent"
+            },
+            {
+              "id": "custom.cellOptions",
+              "value": {
+                "type": "color-text"
               }
-            ]
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Time"
-        },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "dateTimeAsLocal"
-          },
-          {
-            "id": "custom.width",
-            "value": 180
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Stake %"
-        },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "percent"
-          },
-          {
-            "id": "custom.cellOptions",
-            "value": {
-              "type": "color-text"
+            },
+            {
+              "id": "color",
+              "value": {
+                "mode": "continuous-GrYlRd"
+              }
             }
-          },
-          {
-            "id": "color",
-            "value": {
-              "mode": "continuous-GrYlRd"
-            }
-          }
-        ]
-      }
-    ]
-  }
+          ]
+        }
+      ]
+    }
+  },
+  "version": 1
 }

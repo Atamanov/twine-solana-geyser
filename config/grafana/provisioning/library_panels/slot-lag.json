@@ -1,68 +1,73 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Slot Lag",
   "uid": "slot-lag",
-  "title": "Slot Lag",
-  "description": "Difference between network tip and validator processed slot",
-  "type": "stat",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "colorMode": "value",
-    "graphMode": "area",
-    "justifyMode": "center",
-    "orientation": "auto",
-    "percentChangeColorMode": "standard",
-    "reduceOptions": {
-      "calcs": ["lastNotNull"],
-      "fields": "",
-      "values": false
-    },
-    "showPercentChange": false,
-    "textMode": "value_and_name",
-    "wideLayout": true
-  },
-  "targets": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
+  "model": {
+    "title": "Slot Lag",
+    "description": "Difference between network tip and validator processed slot",
+    "type": "stat",
+    "options": {
+      "colorMode": "value",
+      "graphMode": "area",
+      "justifyMode": "center",
+      "orientation": "auto",
+      "percentChangeColorMode": "standard",
+      "reduceOptions": {
+        "calcs": [
+          "lastNotNull"
+        ],
+        "fields": "",
+        "values": false
       },
-      "editorMode": "code",
-      "expr": "twine_geyser_network_slot - twine_geyser_validator_slot",
-      "legendFormat": "Lag",
-      "range": true,
-      "refId": "A"
+      "showPercentChange": false,
+      "textMode": "value_and_name",
+      "wideLayout": true
+    },
+    "targets": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_network_slot - twine_geyser_validator_slot",
+        "legendFormat": "Lag",
+        "range": true,
+        "refId": "A"
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            },
+            {
+              "color": "yellow",
+              "value": 10
+            },
+            {
+              "color": "orange",
+              "value": 50
+            },
+            {
+              "color": "red",
+              "value": 100
+            }
+          ]
+        },
+        "unit": "none",
+        "decimals": 0
+      },
+      "overrides": []
     }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "green",
-            "value": null
-          },
-          {
-            "color": "yellow",
-            "value": 10
-          },
-          {
-            "color": "orange",
-            "value": 50
-          },
-          {
-            "color": "red",
-            "value": 100
-          }
-        ]
-      },
-      "unit": "none",
-      "decimals": 0
-    },
-    "overrides": []
-  }
+  },
+  "version": 1
 }

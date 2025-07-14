@@ -1,129 +1,135 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Vote Participation Rate",
   "uid": "vote-participation-rate",
-  "title": "Vote Participation Rate",
-  "description": "Real-time validator vote participation metrics",
-  "type": "timeseries",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "legend": {
-      "calcs": ["mean", "lastNotNull"],
-      "displayMode": "table",
-      "placement": "bottom",
-      "showLegend": true
+  "model": {
+    "title": "Vote Participation Rate",
+    "description": "Real-time validator vote participation metrics",
+    "type": "timeseries",
+    "options": {
+      "legend": {
+        "calcs": [
+          "mean",
+          "lastNotNull"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true
+      },
+      "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+      }
     },
-    "tooltip": {
-      "mode": "multi",
-      "sort": "desc"
+    "targets": [
+      {
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
+        },
+        "editorMode": "code",
+        "format": "time_series",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  time_bucket('30 seconds', created_at) AS time,\n  AVG(participating_stake_percentage) AS \"Participation %\",\n  AVG(unique_voters_count) AS \"Active Voters\"\nFROM vote_participation_stats\nWHERE created_at >= NOW() - INTERVAL '30 minutes'\nGROUP BY time\nORDER BY time",
+        "refId": "A",
+        "sql": {
+          "columns": [
+            {
+              "parameters": [],
+              "type": "function"
+            }
+          ],
+          "groupBy": [
+            {
+              "property": {
+                "type": "string"
+              },
+              "type": "groupBy"
+            }
+          ],
+          "limit": 50
+        }
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "palette-classic"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "gradientMode": "none",
+          "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+          },
+          "insertNulls": false,
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "pointSize": 5,
+          "scaleDistribution": {
+            "type": "linear"
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "none"
+          },
+          "thresholdsStyle": {
+            "mode": "dashed"
+          }
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            },
+            {
+              "color": "red",
+              "value": 66.67
+            }
+          ]
+        },
+        "unit": "percent"
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Active Voters"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "none"
+            },
+            {
+              "id": "custom.axisPlacement",
+              "value": "right"
+            },
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            }
+          ]
+        }
+      ]
     }
   },
-  "targets": [
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
-      },
-      "editorMode": "code",
-      "format": "time_series",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  time_bucket('30 seconds', created_at) AS time,\n  AVG(participating_stake_percentage) AS \"Participation %\",\n  AVG(unique_voters_count) AS \"Active Voters\"\nFROM vote_participation_stats\nWHERE created_at >= NOW() - INTERVAL '30 minutes'\nGROUP BY time\nORDER BY time",
-      "refId": "A",
-      "sql": {
-        "columns": [
-          {
-            "parameters": [],
-            "type": "function"
-          }
-        ],
-        "groupBy": [
-          {
-            "property": {
-              "type": "string"
-            },
-            "type": "groupBy"
-          }
-        ],
-        "limit": 50
-      }
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "palette-classic"
-      },
-      "custom": {
-        "axisBorderShow": false,
-        "axisCenteredZero": false,
-        "axisColorMode": "text",
-        "axisLabel": "",
-        "axisPlacement": "auto",
-        "barAlignment": 0,
-        "drawStyle": "line",
-        "fillOpacity": 10,
-        "gradientMode": "none",
-        "hideFrom": {
-          "tooltip": false,
-          "viz": false,
-          "legend": false
-        },
-        "insertNulls": false,
-        "lineInterpolation": "smooth",
-        "lineWidth": 2,
-        "pointSize": 5,
-        "scaleDistribution": {
-          "type": "linear"
-        },
-        "showPoints": "never",
-        "spanNulls": false,
-        "stacking": {
-          "group": "A",
-          "mode": "none"
-        },
-        "thresholdsStyle": {
-          "mode": "dashed"
-        }
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "green",
-            "value": null
-          },
-          {
-            "color": "red",
-            "value": 66.67
-          }
-        ]
-      },
-      "unit": "percent"
-    },
-    "overrides": [
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Active Voters"
-        },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "none"
-          },
-          {
-            "id": "custom.axisPlacement",
-            "value": "right"
-          },
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "blue"
-            }
-          }
-        ]
-      }
-    ]
-  }
+  "version": 1
 }

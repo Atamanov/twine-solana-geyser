@@ -1,117 +1,123 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Memory Usage by Component",
   "uid": "memory-usage",
-  "title": "Memory Usage by Component",
-  "description": "Memory consumption breakdown across plugin components",
-  "type": "timeseries",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "legend": {
-      "calcs": ["mean", "lastNotNull"],
-      "displayMode": "table",
-      "placement": "bottom",
-      "showLegend": true
+  "model": {
+    "title": "Memory Usage by Component",
+    "description": "Memory consumption breakdown across plugin components",
+    "type": "timeseries",
+    "options": {
+      "legend": {
+        "calcs": [
+          "mean",
+          "lastNotNull"
+        ],
+        "displayMode": "table",
+        "placement": "bottom",
+        "showLegend": true
+      },
+      "tooltip": {
+        "mode": "multi",
+        "sort": "desc"
+      }
     },
-    "tooltip": {
-      "mode": "multi",
-      "sort": "desc"
+    "targets": [
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_memory_airlock_slots / 1024 / 1024",
+        "legendFormat": "Airlock Slots",
+        "range": true,
+        "refId": "A"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_memory_airlock_changes / 1024 / 1024",
+        "legendFormat": "Airlock Changes",
+        "range": true,
+        "refId": "B"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_memory_airlock_votes / 1024 / 1024",
+        "legendFormat": "Airlock Votes",
+        "range": true,
+        "refId": "C"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_memory_thread_local / 1024 / 1024",
+        "legendFormat": "Thread Local",
+        "range": true,
+        "refId": "D"
+      }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "palette-classic"
+        },
+        "custom": {
+          "axisBorderShow": false,
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "Memory (MB)",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 20,
+          "gradientMode": "none",
+          "hideFrom": {
+            "tooltip": false,
+            "viz": false,
+            "legend": false
+          },
+          "insertNulls": false,
+          "lineInterpolation": "smooth",
+          "lineWidth": 2,
+          "pointSize": 5,
+          "scaleDistribution": {
+            "type": "linear"
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
+            "group": "A",
+            "mode": "normal"
+          },
+          "thresholdsStyle": {
+            "mode": "off"
+          }
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "green",
+              "value": null
+            }
+          ]
+        },
+        "unit": "decmbytes"
+      },
+      "overrides": []
     }
   },
-  "targets": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_memory_airlock_slots / 1024 / 1024",
-      "legendFormat": "Airlock Slots",
-      "range": true,
-      "refId": "A"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_memory_airlock_changes / 1024 / 1024",
-      "legendFormat": "Airlock Changes",
-      "range": true,
-      "refId": "B"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_memory_airlock_votes / 1024 / 1024",
-      "legendFormat": "Airlock Votes",
-      "range": true,
-      "refId": "C"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_memory_thread_local / 1024 / 1024",
-      "legendFormat": "Thread Local",
-      "range": true,
-      "refId": "D"
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "palette-classic"
-      },
-      "custom": {
-        "axisBorderShow": false,
-        "axisCenteredZero": false,
-        "axisColorMode": "text",
-        "axisLabel": "Memory (MB)",
-        "axisPlacement": "auto",
-        "barAlignment": 0,
-        "drawStyle": "line",
-        "fillOpacity": 20,
-        "gradientMode": "none",
-        "hideFrom": {
-          "tooltip": false,
-          "viz": false,
-          "legend": false
-        },
-        "insertNulls": false,
-        "lineInterpolation": "smooth",
-        "lineWidth": 2,
-        "pointSize": 5,
-        "scaleDistribution": {
-          "type": "linear"
-        },
-        "showPoints": "never",
-        "spanNulls": false,
-        "stacking": {
-          "group": "A",
-          "mode": "normal"
-        },
-        "thresholdsStyle": {
-          "mode": "off"
-        }
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "green",
-            "value": null
-          }
-        ]
-      },
-      "unit": "decmbytes"
-    },
-    "overrides": []
-  }
+  "version": 1
 }

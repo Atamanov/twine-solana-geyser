@@ -1,157 +1,160 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Recent Slots with LtHash",
   "uid": "recent-slots-table",
-  "title": "Recent Slots with LtHash",
-  "description": "Table showing recent slots with their LtHash data status",
-  "type": "table",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "showHeader": true,
-    "sortBy": [
+  "model": {
+    "title": "Recent Slots with LtHash",
+    "description": "Table showing recent slots with their LtHash data status",
+    "type": "table",
+    "options": {
+      "showHeader": true,
+      "sortBy": [
+        {
+          "desc": true,
+          "displayName": "Slot"
+        }
+      ],
+      "cellHeight": "sm",
+      "frameIndex": 0,
+      "showTypeIcons": false
+    },
+    "targets": [
       {
-        "desc": true,
-        "displayName": "Slot"
+        "datasource": {
+          "type": "postgres",
+          "uid": "${postgres}"
+        },
+        "editorMode": "code",
+        "format": "table",
+        "rawQuery": true,
+        "rawSql": "SELECT \n  slot AS \"Slot\",\n  status AS \"Status\",\n  CASE \n    WHEN accounts_lt_hash IS NOT NULL THEN '✓ Yes'\n    ELSE '✗ No'\n  END AS \"Has LtHash\",\n  parent_slot AS \"Parent\",\n  executed_transaction_count AS \"Tx Count\",\n  entry_count AS \"Entries\",\n  created_at AS \"Time\"\nFROM slots\nORDER BY slot DESC\nLIMIT 20",
+        "refId": "A",
+        "sql": {
+          "columns": [
+            {
+              "parameters": [],
+              "type": "function"
+            }
+          ],
+          "groupBy": [
+            {
+              "property": {
+                "type": "string"
+              },
+              "type": "groupBy"
+            }
+          ],
+          "limit": 50
+        }
       }
     ],
-    "cellHeight": "sm",
-    "frameIndex": 0,
-    "showTypeIcons": false
-  },
-  "targets": [
-    {
-      "datasource": {
-        "type": "postgres",
-        "uid": "${postgres}"
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "text",
+              "value": null
+            }
+          ]
+        },
+        "custom": {
+          "align": "auto",
+          "cellOptions": {
+            "type": "auto"
+          },
+          "inspect": false,
+          "filterable": false
+        }
       },
-      "editorMode": "code",
-      "format": "table",
-      "rawQuery": true,
-      "rawSql": "SELECT \n  slot AS \"Slot\",\n  status AS \"Status\",\n  CASE \n    WHEN accounts_lt_hash IS NOT NULL THEN '✓ Yes'\n    ELSE '✗ No'\n  END AS \"Has LtHash\",\n  parent_slot AS \"Parent\",\n  executed_transaction_count AS \"Tx Count\",\n  entry_count AS \"Entries\",\n  created_at AS \"Time\"\nFROM slots\nORDER BY slot DESC\nLIMIT 20",
-      "refId": "A",
-      "sql": {
-        "columns": [
-          {
-            "parameters": [],
-            "type": "function"
-          }
-        ],
-        "groupBy": [
-          {
-            "property": {
-              "type": "string"
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Has LtHash"
+          },
+          "properties": [
+            {
+              "id": "custom.cellOptions",
+              "value": {
+                "type": "color-text"
+              }
             },
-            "type": "groupBy"
-          }
-        ],
-        "limit": 50
-      }
+            {
+              "id": "mappings",
+              "value": [
+                {
+                  "type": "value",
+                  "options": {
+                    "✓ Yes": {
+                      "text": "✓ Yes",
+                      "color": "green"
+                    },
+                    "✗ No": {
+                      "text": "✗ No",
+                      "color": "red"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Status"
+          },
+          "properties": [
+            {
+              "id": "custom.cellOptions",
+              "value": {
+                "type": "color-background"
+              }
+            },
+            {
+              "id": "mappings",
+              "value": [
+                {
+                  "type": "value",
+                  "options": {
+                    "rooted": {
+                      "text": "Rooted",
+                      "color": "dark-green"
+                    },
+                    "confirmed": {
+                      "text": "Confirmed",
+                      "color": "semi-dark-green"
+                    },
+                    "processed": {
+                      "text": "Processed",
+                      "color": "dark-blue"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Time"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "dateTimeAsLocal"
+            }
+          ]
+        }
+      ]
     }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "text",
-            "value": null
-          }
-        ]
-      },
-      "custom": {
-        "align": "auto",
-        "cellOptions": {
-          "type": "auto"
-        },
-        "inspect": false,
-        "filterable": false
-      }
-    },
-    "overrides": [
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Has LtHash"
-        },
-        "properties": [
-          {
-            "id": "custom.cellOptions",
-            "value": {
-              "type": "color-text"
-            }
-          },
-          {
-            "id": "mappings",
-            "value": [
-              {
-                "type": "value",
-                "options": {
-                  "✓ Yes": {
-                    "text": "✓ Yes",
-                    "color": "green"
-                  },
-                  "✗ No": {
-                    "text": "✗ No",
-                    "color": "red"
-                  }
-                }
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Status"
-        },
-        "properties": [
-          {
-            "id": "custom.cellOptions",
-            "value": {
-              "type": "color-background"
-            }
-          },
-          {
-            "id": "mappings",
-            "value": [
-              {
-                "type": "value",
-                "options": {
-                  "rooted": {
-                    "text": "Rooted",
-                    "color": "dark-green"
-                  },
-                  "confirmed": {
-                    "text": "Confirmed",
-                    "color": "semi-dark-green"
-                  },
-                  "processed": {
-                    "text": "Processed",
-                    "color": "dark-blue"
-                  }
-                }
-              }
-            ]
-          }
-        ]
-      },
-      {
-        "matcher": {
-          "id": "byName",
-          "options": "Time"
-        },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "dateTimeAsLocal"
-          }
-        ]
-      }
-    ]
-  }
+  },
+  "version": 1
 }

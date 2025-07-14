@@ -1,137 +1,142 @@
 {
+  "folderUid": "twine-geyser",
+  "name": "Buffer Statistics",
   "uid": "buffer-statistics",
-  "title": "Buffer Statistics",
-  "description": "Plugin buffer utilization and performance metrics",
-  "type": "stat",
-  "schemaVersion": 39,
-  "version": 1,
-  "options": {
-    "colorMode": "background",
-    "graphMode": "area",
-    "justifyMode": "center",
-    "orientation": "horizontal",
-    "percentChangeColorMode": "standard",
-    "reduceOptions": {
-      "calcs": ["lastNotNull"],
-      "fields": "",
-      "values": false
+  "model": {
+    "title": "Buffer Statistics",
+    "description": "Plugin buffer utilization and performance metrics",
+    "type": "stat",
+    "options": {
+      "colorMode": "background",
+      "graphMode": "area",
+      "justifyMode": "center",
+      "orientation": "horizontal",
+      "percentChangeColorMode": "standard",
+      "reduceOptions": {
+        "calcs": [
+          "lastNotNull"
+        ],
+        "fields": "",
+        "values": false
+      },
+      "showPercentChange": false,
+      "textMode": "value_and_name",
+      "wideLayout": true
     },
-    "showPercentChange": false,
-    "textMode": "value_and_name",
-    "wideLayout": true
-  },
-  "targets": [
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_buffer_hit_rate * 100",
-      "legendFormat": "Hit Rate",
-      "range": true,
-      "refId": "A"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_buffer_eviction_rate",
-      "legendFormat": "Evictions/s",
-      "range": true,
-      "refId": "B"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${prometheus}"
-      },
-      "editorMode": "code",
-      "expr": "twine_geyser_buffer_size",
-      "legendFormat": "Buffer Size",
-      "range": true,
-      "refId": "C"
-    }
-  ],
-  "fieldConfig": {
-    "defaults": {
-      "color": {
-        "mode": "thresholds"
-      },
-      "mappings": [],
-      "thresholds": {
-        "mode": "absolute",
-        "steps": [
-          {
-            "color": "red",
-            "value": null
-          },
-          {
-            "color": "yellow",
-            "value": 80
-          },
-          {
-            "color": "green",
-            "value": 95
-          }
-        ]
-      },
-      "unit": "percent"
-    },
-    "overrides": [
+    "targets": [
       {
-        "matcher": {
-          "id": "byName",
-          "options": "Evictions/s"
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
         },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "ops"
-          },
-          {
-            "id": "thresholds",
-            "value": {
-              "mode": "absolute",
-              "steps": [
-                {
-                  "color": "green",
-                  "value": null
-                },
-                {
-                  "color": "yellow",
-                  "value": 10
-                },
-                {
-                  "color": "red",
-                  "value": 100
-                }
-              ]
-            }
-          }
-        ]
+        "editorMode": "code",
+        "expr": "twine_geyser_buffer_hit_rate * 100",
+        "legendFormat": "Hit Rate",
+        "range": true,
+        "refId": "A"
       },
       {
-        "matcher": {
-          "id": "byName",
-          "options": "Buffer Size"
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
         },
-        "properties": [
-          {
-            "id": "unit",
-            "value": "none"
-          },
-          {
-            "id": "color",
-            "value": {
-              "mode": "fixed",
-              "fixedColor": "blue"
-            }
-          }
-        ]
+        "editorMode": "code",
+        "expr": "twine_geyser_buffer_eviction_rate",
+        "legendFormat": "Evictions/s",
+        "range": true,
+        "refId": "B"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${prometheus}"
+        },
+        "editorMode": "code",
+        "expr": "twine_geyser_buffer_size",
+        "legendFormat": "Buffer Size",
+        "range": true,
+        "refId": "C"
       }
-    ]
-  }
+    ],
+    "fieldConfig": {
+      "defaults": {
+        "color": {
+          "mode": "thresholds"
+        },
+        "mappings": [],
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "red",
+              "value": null
+            },
+            {
+              "color": "yellow",
+              "value": 80
+            },
+            {
+              "color": "green",
+              "value": 95
+            }
+          ]
+        },
+        "unit": "percent"
+      },
+      "overrides": [
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Evictions/s"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "ops"
+            },
+            {
+              "id": "thresholds",
+              "value": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "yellow",
+                    "value": 10
+                  },
+                  {
+                    "color": "red",
+                    "value": 100
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "matcher": {
+            "id": "byName",
+            "options": "Buffer Size"
+          },
+          "properties": [
+            {
+              "id": "unit",
+              "value": "none"
+            },
+            {
+              "id": "color",
+              "value": {
+                "mode": "fixed",
+                "fixedColor": "blue"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "version": 1
 }

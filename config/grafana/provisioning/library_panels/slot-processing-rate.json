@@ -1,99 +1,100 @@
 
 {
-    "name": "Slot Processing Rate",
-    "model": {
+  "folderUid": "twine-geyser",
+  "name": "Slot Processing Rate",
+  "uid": "slot-processing-rate",
+  "model": {
     "datasource": {
-        "type": "prometheus",
-        "uid": "${datasource}"
+      "type": "prometheus",
+      "uid": "${prometheus}"
     },
     "fieldConfig": {
-        "defaults": {
+      "defaults": {
         "color": {
-            "mode": "palette-classic"
+          "mode": "palette-classic"
         },
         "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
+          "axisCenteredZero": false,
+          "axisColorMode": "text",
+          "axisLabel": "",
+          "axisPlacement": "auto",
+          "barAlignment": 0,
+          "drawStyle": "line",
+          "fillOpacity": 10,
+          "gradientMode": "none",
+          "hideFrom": {
             "tooltip": false,
             "viz": false,
             "legend": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
+          },
+          "insertNulls": false,
+          "lineInterpolation": "linear",
+          "lineWidth": 1,
+          "pointSize": 5,
+          "scaleDistribution": {
             "type": "linear"
-            },
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
+          },
+          "showPoints": "never",
+          "spanNulls": false,
+          "stacking": {
             "group": "A",
             "mode": "none"
-            },
-            "thresholdsStyle": {
+          },
+          "thresholdsStyle": {
             "mode": "off"
-            }
+          }
         },
         "mappings": [],
         "thresholds": {
-            "mode": "absolute",
-            "steps": [
+          "mode": "absolute",
+          "steps": [
             {
-                "color": "green",
-                "value": null
+              "color": "green",
+              "value": null
             }
-            ]
+          ]
         },
         "unit": "ops"
-        },
-        "overrides": []
+      },
+      "overrides": []
     },
     "options": {
-        "tooltip": {
+      "tooltip": {
         "mode": "multi",
         "sort": "desc"
-        },
-        "legend": {
+      },
+      "legend": {
         "displayMode": "list",
         "placement": "bottom",
         "showLegend": true
-        }
+      }
     },
     "targets": [
-        {
+      {
         "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
+          "type": "prometheus",
+          "uid": "${prometheus}"
         },
         "editorMode": "code",
         "expr": "rate(geyser_slots_created_total[5m])",
         "legendFormat": "Slots Created/sec",
         "range": true,
         "refId": "A"
-        },
-        {
+      },
+      {
         "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
+          "type": "prometheus",
+          "uid": "${prometheus}"
         },
         "editorMode": "code",
         "expr": "rate(geyser_slots_completed_total[5m])",
         "legendFormat": "Slots Completed/sec",
         "range": true,
         "refId": "B"
-        }
+      }
     ],
     "title": "Slot Processing Rate",
     "type": "timeseries"
-    },
-    "type": "graph",
-    "schemaVersion": 1
+  },
+  "version": 1
 }
