@@ -25,7 +25,6 @@ use std::time::Duration;
 use crate::chain_monitor::ChainMonitor;
 use crate::metrics_server::MetricsServer;
 use crate::worker_pool::WorkerPool;
-use crate::api_server::ApiServerHandle;
 use crate::stake::StakeAccountInfo;
 
 #[derive(Debug)]
@@ -74,7 +73,7 @@ pub struct TwineGeyserPlugin {
     metrics_server: Option<tokio::task::JoinHandle<()>>,
     
     /// API server handle
-    api_server: Option<ApiServerHandle>,
+    api_server: Option<std::thread::JoinHandle<()>>,
     
     /// Chain monitor
     chain_monitor: Option<Arc<ChainMonitor>>,
@@ -641,7 +640,7 @@ impl GeyserPlugin for TwineGeyserPlugin {
             );
             
             // Spawn API server in a separate thread with its own runtime
-            self.api_server = Some(tokio::task::spawn_blocking(move || {
+            self.api_server = Some(std::thread::spawn(move || {
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async move {
                     if let Err(e) = api_server.run().await {
