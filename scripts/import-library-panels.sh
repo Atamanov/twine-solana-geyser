@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Wait for Grafana to be available
-until $(curl --output /dev/null --silent --head --fail http://admin:admin@localhost:3000/api/health); do
+until $(curl --output /dev/null --silent --head --fail http://admin:admin@grafana:3000/api/health); do
     echo "Waiting for Grafana..."
     sleep 2
 done
@@ -14,13 +14,13 @@ FOLDER_UID="twine-geyser"
 FOLDER_TITLE="Twine Geyser"
 
 # Check if folder exists
-STATUS_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" http://admin:admin@localhost:3000/api/folders/${FOLDER_UID})
+STATUS_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" http://admin:admin@grafana:3000/api/folders/${FOLDER_UID})
 
 if [ "$STATUS_CODE" -eq 404 ]; then
   echo "Folder '${FOLDER_TITLE}' not found, creating it..."
   curl --silent --show-error -X POST -H "Content-Type: application/json" \
        -d "{\"uid\": \"${FOLDER_UID}\", \"title\": \"${FOLDER_TITLE}\"}" \
-       http://admin:admin@localhost:3000/api/folders
+       http://admin:admin@grafana:3000/api/folders
   echo
 else
   echo "Folder '${FOLDER_TITLE}' already exists."
@@ -43,8 +43,15 @@ for file in /etc/grafana/provisioning/library_panels/*.json; do
     # POST the panel to Grafana
     curl --silent --show-error -X POST -H "Content-Type: application/json" \
          -d "$PAYLOAD" \
-         http://admin:admin@localhost:3000/api/library-elements
+         http://admin:admin@grafana:3000/api/library-elements
     echo
 done
 
-echo "Library panel creation process finished." 
+echo "Library panel creation process finished."
+
+# Reload dashboard provisioning to make sure dashboards pick up new panels
+echo "Reloading dashboard provisioning..."
+curl -X POST http://admin:admin@grafana:3000/api/admin/provisioning/dashboards/reload
+echo
+
+echo "Importer finished." 
