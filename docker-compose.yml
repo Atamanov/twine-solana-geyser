@@ -68,22 +68,45 @@ services:
       - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-      - '--web.enable-lifecycle'
-      - '--storage.tsdb.retention.time=30d'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+      - "--web.enable-lifecycle"
+      - "--storage.tsdb.retention.time=30d"
     ports:
       - "9090:9090"
     networks:
       - twine-network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9090/-/healthy",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  grafana-importer:
+    image: alpine/curl
+    container_name: twine-grafana-importer
+    restart: on-failure
+    depends_on:
+      grafana:
+        condition: service_healthy
+    volumes:
+      - ./scripts/import-library-panels.sh:/import-library-panels.sh:ro
+      - ./config/grafana/provisioning/library_panels:/etc/grafana/provisioning/library_panels:ro
+    networks:
+      - twine-network
+    command: >
+      sh -c "apk add --no-cache jq && sh /import-library-panels.sh"
 
   grafana:
     image: grafana/grafana:latest

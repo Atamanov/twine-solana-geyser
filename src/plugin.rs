@@ -18,7 +18,6 @@ use crate::db_writer::{create_pool, spawn_db_writers, DbCommand, DbConfig};
 use crate::metrics::spawn_metrics_server;
 use crate::api::spawn_api_server;
 use crate::rpc_poller::RpcPoller;
-use crate::test_data_generator::TestDataGenerator;
 
 pub struct TwineGeyserPlugin {
     config: PluginConfig,
@@ -34,7 +33,6 @@ pub struct TwineGeyserPlugin {
     monitored_accounts: Arc<parking_lot::RwLock<Vec<Pubkey>>>,
     update_context: Arc<parking_lot::RwLock<Option<Box<dyn MonitoredAccountsContext + Send + Sync>>>>,
     rpc_poller: Option<Arc<RpcPoller>>,
-    test_generator: Option<Arc<TestDataGenerator>>,
 }
 
 impl std::fmt::Debug for TwineGeyserPlugin {
@@ -63,8 +61,6 @@ pub struct PluginConfig {
     pub api_port: u16,
     #[serde(default = "default_rpc_url")]
     pub rpc_url: String,
-    #[serde(default)]
-    pub test_mode: bool,
 }
 
 fn default_rpc_url() -> String {
@@ -95,7 +91,6 @@ impl TwineGeyserPlugin {
                 metrics_port: 9090,
                 api_port: 8090,
                 rpc_url: "http://localhost:8899".to_string(),
-                test_mode: false,
             },
             airlock: Arc::new(AirLock::new()),
             is_startup_completed: AtomicBool::new(false),
@@ -109,7 +104,6 @@ impl TwineGeyserPlugin {
             monitored_accounts: Arc::new(parking_lot::RwLock::new(Vec::new())),
             update_context: Arc::new(parking_lot::RwLock::new(None)),
             rpc_poller: None,
-            test_generator: None,
         }
     }
 }
@@ -268,27 +262,6 @@ impl GeyserPlugin for TwineGeyserPlugin {
         self.rpc_poller_thread = Some(rpc_poller_thread);
 
         log::info!("Twine Geyser Plugin loaded successfully");
-        
-        if self.config.test_mode {
-            log::warn!("=================================================================");
-            log::warn!("TEST MODE ENABLED - Generating synthetic data");
-            log::warn!("This mode is for development and testing only");
-            log::warn!("=================================================================");
-            
-            // Create and start test data generator
-            let generator = Arc::new(TestDataGenerator::new(self.airlock.clone()));
-            generator.start();
-            self.test_generator = Some(generator);
-        } else {
-            log::warn!("=================================================================");
-            log::warn!("IMPORTANT: This plugin requires the enhanced Twine Geyser interface");
-            log::warn!("The standard Solana Geyser interface does not provide:");
-            log::warn!("  - Old account state and LT hashes in notify_account_change");
-            log::warn!("  - Bank hash components via notify_bank_hash_components");
-            log::warn!("Without these, the plugin cannot create proper change records");
-            log::warn!("=================================================================");
-        }
-        
         Ok(())
     }
 
@@ -300,11 +273,6 @@ impl GeyserPlugin for TwineGeyserPlugin {
 
         // Stop accepting new slot updates
         self.is_startup_completed.store(false, Ordering::SeqCst);
-        
-        // Stop test generator if running
-        if let Some(generator) = &self.test_generator {
-            generator.stop();
-        }
 
         // Give threads a moment to finish current operations
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -578,18 +546,18 @@ impl GeyserPlugin for TwineGeyserPlugin {
     }
     
     fn notify_account_change(&self, account_change: GeyserOwnedAccountChange) -> PluginResult<()> {
-        log::info!("notify_account_change called for slot {} pubkey {}", account_change.slot, account_change.pubkey);
+        // Convert to our OwnedAccountChange type and process
+        let change = OwnedAccountChange {
+            pubkey: account_change.pubkey,
+            slot: account_change.slot,
+            old_account: account_change.old_account,
+            new_account: account_change.new_account,
+            old_lthash: account_change.old_lthash,
+            new_lthash: account_change.new_lthash,
+        };
         
-        // NOTE: Standard Geyser interface doesn't provide old_account, old_lthash, new_lthash
-        // These fields are only available in the enhanced Twine Geyser interface
-        // For compatibility, we'll log a warning and skip processing
-        log::warn!("Standard Geyser interface detected - account change data incomplete");
-        log::warn!("This plugin requires the enhanced Twine Geyser interface to function properly");
-        log::warn!("Without old_account and LT hash data, we cannot create proper change records");
-        
-        // Could optionally implement a degraded mode here that just tracks current state
-        // but it wouldn't be useful for the intended purpose of this plugin
-        
+        // Use our existing notify_account_changes method
+        self.notify_account_changes(account_change.slot, vec![change]);
         Ok(())
     }
     
