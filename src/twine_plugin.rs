@@ -116,6 +116,8 @@ impl Default for TwineGeyserPlugin {
             cleanup_queue: Arc::new(Mutex::new(VecDeque::new())),
             cleanup_task: None,
             update_context: None,
+            account_update_receiver: None,
+            account_update_task: None,
         }
     }
 }
@@ -595,6 +597,9 @@ impl GeyserPlugin for TwineGeyserPlugin {
     fn set_update_context(&mut self, context: Box<dyn MonitoredAccountsContext + Send + Sync>) {
         info!("Setting update context for dynamic monitored accounts updates");
         self.update_context = Some(context);
+        
+        // Start the account update listener task
+        self.start_account_update_listener();
     }
 }
 

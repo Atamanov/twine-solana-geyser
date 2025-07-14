@@ -7,6 +7,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::sync::mpsc;
+use crossbeam_channel::Sender as CrossbeamSender;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MonitoredAccount {
@@ -40,6 +41,7 @@ pub struct ApiState {
     pub monitored_accounts: Arc<DashSet<Pubkey>>,
     pub account_metadata: Arc<RwLock<std::collections::HashMap<Pubkey, chrono::DateTime<chrono::Utc>>>>,
     pub db_config: String,
+    pub update_notifier: Option<CrossbeamSender<()>>,
 }
 
 #[derive(Debug)]
@@ -52,6 +54,7 @@ pub fn start_api_server(
     monitored_accounts: Arc<DashSet<Pubkey>>,
     api_port: u16,
     db_config: String,
+    update_notifier: Option<CrossbeamSender<()>>,
 ) -> ApiServerHandle {
     let account_metadata = Arc::new(RwLock::new(std::collections::HashMap::new()));
     
@@ -59,6 +62,7 @@ pub fn start_api_server(
         monitored_accounts,
         account_metadata,
         db_config,
+        update_notifier,
     });
 
     info!("Starting API server on port {}", api_port);
@@ -191,6 +195,13 @@ async fn add_monitored_account(
                     }
                 }
                 
+                // Notify plugin to update with plugin manager
+                if let Some(notifier) = &data.update_notifier {
+                    if let Err(e) = notifier.send(()) {
+                        warn!("Failed to notify plugin of account update: {}", e);
+                    }
+                }
+                
                 info!("Added monitored account: {}", cleaned_pubkey);
                 Ok(HttpResponse::Ok().json(&ApiResponse {
                     success: true,
@@ -257,6 +268,13 @@ async fn remove_monitored_account(
                     }
                     Err(e) => {
                         error!("Failed to deactivate account in DB: {} - {}", cleaned_pubkey, e);
+                    }
+                }
+                
+                // Notify plugin to update with plugin manager
+                if let Some(notifier) = &data.update_notifier {
+                    if let Err(e) = notifier.send(()) {
+                        warn!("Failed to notify plugin of account update: {}", e);
                     }
                 }
                 
