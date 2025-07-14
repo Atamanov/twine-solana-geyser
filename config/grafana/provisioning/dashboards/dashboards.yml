@@ -1,13 +1,14 @@
 apiVersion: 1
 
 providers:
-  - name: 'Twine Geyser Dashboards'
-    orgId: 1
-    folder: 'Twine'
-    folderUid: 'twine-geyser'
-    type: file
-    disableDeletion: false
-    updateIntervalSeconds: 10
-    allowUiUpdates: true
-    options:
-      path: /etc/grafana/provisioning/dashboards
+- name: 'Twine Geyser Provisioned'
+  orgId: 1
+  folder: 'Twine'
+  folderUid: 'twine-geyser'
+  type: file
+  disableDeletion: false
+  editable: true
+  allowUiUpdates: true
+  updateIntervalSeconds: 10
+  options:
+    path: /var/lib/grafana/provisioned_dashboards 

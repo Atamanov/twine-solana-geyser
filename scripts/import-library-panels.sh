@@ -29,28 +29,38 @@ fi
 
 # Loop through each library panel JSON file and create it via the API
 for file in /etc/grafana/provisioning/library_panels/*.json; do
-    echo "Processing $file..."
-    
-    # Extract name and uid from the file to use in the API payload
-    # This assumes the filename matches the intended uid for the library panel
-    BASENAME=$(basename "$file" .json)
-    
-    # Build the payload for the library element API
-    # It requires a folderUid, name, model (the JSON content), and kind (1 for panel)
-    PAYLOAD=$(jq -n --arg name "$BASENAME" --arg folder_uid "$FOLDER_UID" --argjson model "$(cat $file | jq '.model')" \
-      '{folderUid: $folder_uid, name: $name, model: $model, kind: 1}')
+    UID=$(basename "$file" .json)
+    NAME=$(jq -r '.name' "$file")
+    MODEL=$(jq '.model' "$file")
 
-    # POST the panel to Grafana
-    curl --silent --show-error -X POST -H "Content-Type: application/json" \
-         -d "$PAYLOAD" \
-         http://admin:admin@grafana:3000/api/library-elements
-    echo
+    echo "Processing panel: $NAME (uid: $UID)"
+
+    # Check if a library panel with this UID already exists
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://admin:admin@grafana:3000/api/library-elements/${UID})
+
+    if [ "$HTTP_CODE" -eq 404 ]; then
+        echo "  -> Panel does not exist. Creating..."
+        PAYLOAD=$(jq -n --arg name "$NAME" --arg uid "$UID" --arg folder_uid "$FOLDER_UID" --argjson model "$MODEL" '{ "folderUid": $folder_uid, "name": $name, "uid": $uid, "model": $model, "kind": 1 }')
+        
+        curl --silent --show-error -X POST -H "Content-Type: application/json" -d "$PAYLOAD" http://admin:admin@grafana:3000/api/library-elements
+        echo
+    else
+        echo "  -> Panel already exists. Skipping creation."
+    fi
 done
 
 echo "Library panel creation process finished."
 
-# Copy the dashboard provider config into place to trigger provisioning
-echo "Triggering dashboard provisioning..."
-cp /etc/grafana/provisioning/dashboards/dashboards.yml.template /etc/grafana/provisioning/dashboards/dashboards.yml
+# Define source and destination for the dashboard
+DASHBOARD_SOURCE_FILE="/etc/grafana/dashboards_source/main-dashboard.json"
+DASHBOARD_DEST_DIR="/var/lib/grafana/provisioned_dashboards"
+
+# Create the destination directory
+echo "Creating dashboard destination directory: ${DASHBOARD_DEST_DIR}"
+mkdir -p "${DASHBOARD_DEST_DIR}"
+
+# Copy the main dashboard JSON file to trigger provisioning
+echo "Copying main dashboard to trigger provisioning..."
+cp "${DASHBOARD_SOURCE_FILE}" "${DASHBOARD_DEST_DIR}/main-dashboard.json"
 
 echo "Importer finished." 
